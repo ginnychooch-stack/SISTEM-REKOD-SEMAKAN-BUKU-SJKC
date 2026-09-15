@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Rekod Semakan Buku",
+  "description": "Sistem rekod semakan buku latihan dan kerja murid Cikgu Choo Chee Hong bagi Tahun 1 (BM, BI, Sains), Tahun 5 (Matematik), dan Tahun 6 (Sejarah) di SJK(C) Alor Pongsu.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
