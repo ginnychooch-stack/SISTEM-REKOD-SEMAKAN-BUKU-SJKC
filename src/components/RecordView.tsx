@@ -32,7 +32,7 @@ interface RecordViewProps {
   activeAssignment: Assignment | null;
   assignments: Assignment[]; // Assignments for current class & subject
   onSelectAssignment: (assignmentId: string) => void;
-  onCreateOrUpdateTask: (title: string, bookType: BookType) => void;
+  onCreateOrUpdateTask: (title: string, bookType: BookType, dateAssigned?: string) => void;
   onNewTaskRequest: () => void;
   onToggleSubmission: (studentId: string, nextStatus?: SubmissionStatus) => void;
   onUpdateRemark: (studentId: string, remark: RemarkType) => void;
@@ -68,25 +68,50 @@ export const RecordView: React.FC<RecordViewProps> = ({
 }) => {
   const availableSubjects = getMainSubjectsForGrade(currentClass.grade);
 
-  // Task title and book type inputs
+  // Task title, book type, and date inputs
   const [taskTitle, setTaskTitle] = useState(activeAssignment?.title || '');
   const [bookType, setBookType] = useState<BookType>(
     activeAssignment?.bookType || 'Buku Latihan (Tulis/Kira)'
   );
+  const [taskDate, setTaskDate] = useState<string>(() => {
+    return activeAssignment?.dateAssigned || new Date().toISOString().split('T')[0];
+  });
   const [titleError, setTitleError] = useState<string | null>(null);
   const [saveSuccessToast, setSaveSuccessToast] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync title when active assignment changes
+  // Sync title and date when active assignment changes
   useEffect(() => {
     setTaskTitle(activeAssignment?.title || '');
     setBookType(activeAssignment?.bookType || 'Buku Latihan (Tulis/Kira)');
+    setTaskDate(activeAssignment?.dateAssigned || new Date().toISOString().split('T')[0]);
     setTitleError(null);
-  }, [activeAssignment?.id, activeAssignment?.title, selectedSubject]);
+  }, [activeAssignment?.id, activeAssignment?.title, activeAssignment?.dateAssigned, selectedSubject]);
 
   const [filter, setFilter] = useState<'all' | 'dihantar' | 'belum_hantar' | 'belum_disemak'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentForRemark, setSelectedStudentForRemark] = useState<string | null>(null);
+
+  // Helper to format YYYY-MM-DD to DD/MM/YYYY
+  const formatDisplayDate = (dateStr: string): string => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  const getDayNameMalay = (dateStr: string): string => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '';
+      const days = ['Ahad', 'Isnin', 'Selasa', 'Rabu', 'Khamis', 'Jumaat', 'Sabtu'];
+      return days[d.getDay()];
+    } catch {
+      return '';
+    }
+  };
 
   // Format today's date
   const today = new Date();
@@ -143,14 +168,21 @@ export const RecordView: React.FC<RecordViewProps> = ({
     setTaskTitle(val);
     if (val.trim()) {
       setTitleError(null);
-      onCreateOrUpdateTask(val.trim(), bookType);
+      onCreateOrUpdateTask(val.trim(), bookType, taskDate);
     }
   };
 
   const handleBookTypeChange = (val: BookType) => {
     setBookType(val);
     if (taskTitle.trim()) {
-      onCreateOrUpdateTask(taskTitle.trim(), val);
+      onCreateOrUpdateTask(taskTitle.trim(), val, taskDate);
+    }
+  };
+
+  const handleDateChange = (val: string) => {
+    setTaskDate(val);
+    if (taskTitle.trim()) {
+      onCreateOrUpdateTask(taskTitle.trim(), bookType, val);
     }
   };
 
@@ -192,9 +224,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
   const handleSaveRecord = () => {
     if (!validateTitle()) return;
 
-    onCreateOrUpdateTask(taskTitle.trim(), bookType);
+    onCreateOrUpdateTask(taskTitle.trim(), bookType, taskDate);
     setSaveSuccessToast(
-      `Rekod semakan "${taskTitle.trim()}" bagi subjek ${selectedSubject} telah berjaya disimpan!`
+      `Rekod semakan "${taskTitle.trim()}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
     );
     playSuccessDing(soundEnabled);
     setTimeout(() => {
@@ -364,12 +396,39 @@ export const RecordView: React.FC<RecordViewProps> = ({
             </div>
 
             <div className="md:col-span-3 flex flex-col justify-end">
-              <div className="text-xs text-slate-400 mb-1 font-semibold flex items-center gap-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                <span>Tarikh Semakan:</span>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="task-date-input" className="text-xs font-bold text-slate-300 flex items-center gap-1.5 cursor-pointer">
+                  <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Tarikh Semakan:</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    handleDateChange(todayStr);
+                  }}
+                  className="text-[10px] text-amber-300 hover:text-amber-200 underline font-bold cursor-pointer transition-colors"
+                  title="Tetapkan ke tarikh hari ini"
+                >
+                  Hari Ini
+                </button>
               </div>
-              <div className="px-3 py-2.5 bg-slate-800/80 rounded-xl border border-slate-700 text-xs font-bold text-amber-300">
-                {formattedToday} (Automatik)
+              <div className="relative">
+                <input
+                  id="task-date-input"
+                  type="date"
+                  value={taskDate}
+                  onChange={(e) => handleDateChange(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-800 text-amber-300 rounded-xl border border-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/30 text-xs font-bold cursor-pointer transition-all [color-scheme:dark] shadow-inner"
+                  title="Klik ikon kalendar untuk memilih tarikh semakan tugasan"
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                <span>{getDayNameMalay(taskDate) ? `${getDayNameMalay(taskDate)}, ` : ''}{formatDisplayDate(taskDate)}</span>
+                <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Kalendar
+                </span>
               </div>
             </div>
           </div>

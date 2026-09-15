@@ -171,26 +171,28 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
           {/* Dates & Points in 2 columns */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1">
-                Tarikh Beri:
+              <label className="text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Tarikh Beri (Kalendar):</span>
               </label>
               <input
                 type="date"
                 value={dateAssigned}
                 onChange={(e) => setDateAssigned(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
               />
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1">
-                Tarikh Akhir Hantar:
+              <label className="text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Tarikh Akhir (Kalendar):</span>
               </label>
               <input
                 type="date"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
               />
             </div>
           </div>

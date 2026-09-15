@@ -207,15 +207,16 @@ export default function App() {
     currentClassSubjectAssignments[0] ||
     null;
 
-  // Handler to create or update active task title & book type
-  const handleCreateOrUpdateTask = (title: string, bookType: BookType) => {
+  // Handler to create or update active task title & book type & date
+  const handleCreateOrUpdateTask = (title: string, bookType: BookType, dateAssigned?: string) => {
     const today = new Date().toISOString().split('T')[0];
+    const targetDate = dateAssigned || today;
     const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
     if (activeAssignment && activeAssignment.subject === selectedSubject && activeAssignment.classId === selectedClassId) {
       setAssignments((prev) =>
         prev.map((a) =>
-          a.id === activeAssignment.id ? { ...a, title, bookType } : a
+          a.id === activeAssignment.id ? { ...a, title, bookType, dateAssigned: targetDate } : a
         )
       );
     } else {
@@ -237,7 +238,7 @@ export default function App() {
         subject: selectedSubject,
         title,
         bookType,
-        dateAssigned: today,
+        dateAssigned: targetDate,
         dueDate: tomorrow,
         pointsValue: 10,
         submissions: initialSubs,

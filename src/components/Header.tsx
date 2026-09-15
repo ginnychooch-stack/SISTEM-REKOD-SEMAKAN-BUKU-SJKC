@@ -263,8 +263,9 @@ export const Header: React.FC<HeaderProps> = ({
               Tajuk Tugas: {taskTitleDisplay ? taskTitleDisplay : 'Sila masukkan Tajuk Tugas'}
             </span>
             <span className="text-slate-500 hidden sm:inline">•</span>
-            <span className="bg-slate-800 text-slate-300 px-3 py-1 rounded-lg border border-slate-700 font-semibold">
-              Tarikh: {taskDateDisplay}
+            <span className="bg-slate-800 text-slate-300 px-3 py-1 rounded-lg border border-slate-700 font-semibold flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>Tarikh: {taskDateDisplay}</span>
             </span>
           </div>
 
