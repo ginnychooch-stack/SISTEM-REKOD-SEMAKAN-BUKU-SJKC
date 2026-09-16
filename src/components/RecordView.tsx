@@ -17,7 +17,8 @@ import {
   BookOpen,
   Calendar,
   History,
-  Check
+  Check,
+  Loader2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Assignment, BookType, ClassGroup, RemarkType, Student, SubmissionStatus } from '../types';
@@ -34,12 +35,19 @@ interface RecordViewProps {
   onSelectAssignment: (assignmentId: string) => void;
   onCreateOrUpdateTask: (title: string, bookType: BookType, dateAssigned?: string) => void;
   onNewTaskRequest: () => void;
-  onToggleSubmission: (studentId: string, nextStatus?: SubmissionStatus) => void;
+  onToggleSubmission: (
+    studentId: string, 
+    nextStatus?: SubmissionStatus,
+    taskMeta?: { title: string; bookType: BookType; date: string }
+  ) => void;
   onUpdateRemark: (studentId: string, remark: RemarkType) => void;
   onUpdateWorkNote?: (studentId: string, workNote: string) => void;
   onMarkAllSubmitted: () => void;
   onResetSubmissions: () => void;
   soundEnabled: boolean;
+  isSaving?: boolean;
+  onSaveRecord?: (title: string, bookType: BookType, dateAssigned: string) => Promise<boolean>;
+  onOpenRecovery?: () => void;
 }
 
 const BOOK_TYPES: BookType[] = [
@@ -65,6 +73,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
   onMarkAllSubmitted,
   onResetSubmissions,
   soundEnabled,
+  isSaving,
+  onSaveRecord,
+  onOpenRecovery,
 }) => {
   const availableSubjects = getMainSubjectsForGrade(currentClass.grade);
 
@@ -150,15 +161,16 @@ export const RecordView: React.FC<RecordViewProps> = ({
     return true;
   });
 
+  const getEffectiveTitle = (): string => {
+    return taskTitle.trim() || `Semakan ${selectedSubject} (${formatDisplayDate(taskDate) || 'Tugasan'})`;
+  };
+
   // Verify Title Required Validation
   const validateTitle = (): boolean => {
+    const effective = getEffectiveTitle();
     if (!taskTitle.trim()) {
-      setTitleError('Sila masukkan Tajuk Tugas terlebih dahulu.');
-      if (titleInputRef.current) {
-        titleInputRef.current.focus();
-        titleInputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      return false;
+      setTaskTitle(effective);
+      onCreateOrUpdateTask(effective, bookType, taskDate);
     }
     setTitleError(null);
     return true;
@@ -174,25 +186,23 @@ export const RecordView: React.FC<RecordViewProps> = ({
 
   const handleBookTypeChange = (val: BookType) => {
     setBookType(val);
-    if (taskTitle.trim()) {
-      onCreateOrUpdateTask(taskTitle.trim(), val, taskDate);
-    }
+    const effective = getEffectiveTitle();
+    onCreateOrUpdateTask(effective, val, taskDate);
   };
 
   const handleDateChange = (val: string) => {
     setTaskDate(val);
-    if (taskTitle.trim()) {
-      onCreateOrUpdateTask(taskTitle.trim(), bookType, val);
-    }
+    const effective = getEffectiveTitle();
+    onCreateOrUpdateTask(effective, bookType, val);
   };
 
-  const handleCardClick = (studentId: string) => {
-    if (!validateTitle()) return;
-
-    const currentStatus = getSubmissionStatus(activeAssignment?.submissions[studentId]);
-    const nextStatus = getNextStatus(currentStatus);
-
-    if (nextStatus === 'DIHANTAR') {
+  const handleStatusSelect = (studentId: string, status: SubmissionStatus) => {
+    const effective = getEffectiveTitle();
+    if (!taskTitle.trim()) {
+      setTaskTitle(effective);
+      onCreateOrUpdateTask(effective, bookType, taskDate);
+    }
+    if (status === 'DIHANTAR') {
       playSuccessDing(soundEnabled);
       if (dihantarList.length + 1 === currentClass.students.length) {
         confetti({
@@ -205,12 +215,21 @@ export const RecordView: React.FC<RecordViewProps> = ({
     } else {
       playToggleOff(soundEnabled);
     }
+    onToggleSubmission(studentId, status, { title: effective, bookType, date: taskDate });
+  };
 
-    onToggleSubmission(studentId, nextStatus);
+  const handleCardClick = (studentId: string) => {
+    const currentStatus = getSubmissionStatus(activeAssignment?.submissions[studentId]);
+    const nextStatus = getNextStatus(currentStatus);
+    handleStatusSelect(studentId, nextStatus);
   };
 
   const handleMarkAll = () => {
-    if (!validateTitle()) return;
+    const effective = getEffectiveTitle();
+    if (!taskTitle.trim()) {
+      setTaskTitle(effective);
+      onCreateOrUpdateTask(effective, bookType, taskDate);
+    }
 
     playCelebrationFanfare(soundEnabled);
     confetti({
@@ -221,17 +240,33 @@ export const RecordView: React.FC<RecordViewProps> = ({
     onMarkAllSubmitted();
   };
 
-  const handleSaveRecord = () => {
-    if (!validateTitle()) return;
+  const handleSaveRecord = async () => {
+    const effective = getEffectiveTitle();
+    if (!taskTitle.trim()) {
+      setTaskTitle(effective);
+    }
+    onCreateOrUpdateTask(effective, bookType, taskDate);
 
-    onCreateOrUpdateTask(taskTitle.trim(), bookType, taskDate);
-    setSaveSuccessToast(
-      `Rekod semakan "${taskTitle.trim()}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
-    );
-    playSuccessDing(soundEnabled);
-    setTimeout(() => {
-      setSaveSuccessToast(null);
-    }, 4000);
+    if (onSaveRecord) {
+      const ok = await onSaveRecord(effective, bookType, taskDate);
+      if (ok) {
+        setSaveSuccessToast(
+          `Rekod semakan "${effective}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
+        );
+        playSuccessDing(soundEnabled);
+        setTimeout(() => {
+          setSaveSuccessToast(null);
+        }, 3500);
+      }
+    } else {
+      setSaveSuccessToast(
+        `Rekod semakan "${effective}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
+      );
+      playSuccessDing(soundEnabled);
+      setTimeout(() => {
+        setSaveSuccessToast(null);
+      }, 3500);
+    }
   };
 
   return (
@@ -293,6 +328,34 @@ export const RecordView: React.FC<RecordViewProps> = ({
             })}
           </div>
         </div>
+
+        {/* Banner Bantuan Pemulihan Rekod */}
+        {assignments.length === 0 && onOpenRecovery && (
+          <div className="mt-4 bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/15 border border-amber-500/30 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-100 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl shrink-0">
+                <History className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="font-bold text-sm block text-amber-200">
+                  Rekod semakan yang anda simpan semalam tidak kelihatan?
+                </span>
+                <span className="text-xs text-slate-300">
+                  Sistem menyediakan Pusat Pemulihan untuk mengimbas salinan sandaran pelayar, arkib sejarah dan Google Drive.
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenRecovery}
+              id="btn-trigger-recovery-banner"
+              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-md transition-all shrink-0 flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Buka Pusat Pemulihan</span>
+            </button>
+          </div>
+        )}
 
         {/* Step 3: Input TAJUK TUGAS & Maklumat Latihan */}
         <div className="mt-5 space-y-4">
@@ -458,34 +521,46 @@ export const RecordView: React.FC<RecordViewProps> = ({
             <button
               id="save-record-btn"
               type="button"
+              disabled={isSaving}
               onClick={handleSaveRecord}
-              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-md shadow-emerald-700/20 transition-all cursor-pointer border border-emerald-400/40"
-              title="Simpan rekod semakan tugasan ini"
+              className="min-h-[44px] flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-md shadow-emerald-700/20 transition-all cursor-pointer border border-emerald-400/40 touch-manipulation disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Simpan rekod semakan tugasan ini terus ke pangkalan data"
             >
-              <Save className="w-4 h-4 text-emerald-100" />
-              <span>Simpan Rekod Semakan</span>
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-100" />
+                  <span>Menyimpan...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4 text-emerald-100" />
+                  <span>Simpan Rekod Semakan</span>
+                </>
+              )}
             </button>
 
             <button
               id="mark-all-btn"
               type="button"
+              disabled={isSaving}
               onClick={handleMarkAll}
-              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xs transition-all cursor-pointer"
+              className="min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xs transition-all cursor-pointer touch-manipulation disabled:opacity-60"
               title="Tandakan semua murid sebagai Dihantar"
             >
               <CheckCheck className="w-4 h-4 text-blue-200" />
-              <span className="hidden sm:inline">Tanda Semua Dihantar</span>
+              <span>Tanda Semua Dihantar</span>
             </button>
 
             <button
               id="reset-all-btn"
               type="button"
+              disabled={isSaving}
               onClick={() => {
                 if (confirm('Adakah anda pasti mahu set semula status semakan tugasan ini kepada BELUM DISEMAK?')) {
                   onResetSubmissions();
                 }
               }}
-              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 transition-colors cursor-pointer"
+              className="min-h-[44px] flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 transition-colors cursor-pointer touch-manipulation disabled:opacity-60"
               title="Set semula semua rekod tugasan ini ke keadaan asal (BELUM DISEMAK)"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -496,11 +571,12 @@ export const RecordView: React.FC<RecordViewProps> = ({
 
         {/* Filter Tabs & Search Bar */}
         <div className="mt-4 pt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          {/* Status Tabs */}
+          {/* Status Tabs with min-h-[44px] */}
           <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl max-w-fit flex-wrap">
             <button
+              type="button"
               onClick={() => setFilter('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-[44px] px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation ${
                 filter === 'all'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -509,8 +585,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
               Semua ({currentClass.students.length})
             </button>
             <button
+              type="button"
               onClick={() => setFilter('dihantar')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation ${
                 filter === 'dihantar'
                   ? 'bg-emerald-600 text-white shadow-xs'
                   : 'text-emerald-700 hover:text-emerald-800'
@@ -520,8 +597,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
               <span>Dihantar ({dihantarList.length})</span>
             </button>
             <button
+              type="button"
               onClick={() => setFilter('belum_hantar')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation ${
                 filter === 'belum_hantar'
                   ? 'bg-rose-600 text-white shadow-xs'
                   : 'text-rose-700 hover:text-rose-800'
@@ -531,8 +609,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
               <span>Belum Hantar ({belumHantarList.length})</span>
             </button>
             <button
+              type="button"
               onClick={() => setFilter('belum_disemak')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation ${
                 filter === 'belum_disemak'
                   ? 'bg-slate-700 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-800'
@@ -653,10 +732,64 @@ export const RecordView: React.FC<RecordViewProps> = ({
                       </button>
                     </div>
 
+                    {/* 3-State Direct Action Buttons (Hantar, Belum Hantar, Disemak) with min-h-[44px] */}
+                    <div className="grid grid-cols-3 gap-1.5 my-2.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStatusSelect(student.id, 'DIHANTAR');
+                        }}
+                        className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                          isSubmitted
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-600/30'
+                            : 'bg-emerald-50/70 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
+                        }`}
+                        title="Tandakan status murid sebagai Dihantar (+10 mata)"
+                      >
+                        <CheckCircle2 className={`w-4 h-4 shrink-0 ${isSubmitted ? 'text-white fill-emerald-500' : 'text-emerald-600'}`} />
+                        <span className="whitespace-nowrap font-extrabold text-[11px]">Hantar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStatusSelect(student.id, 'BELUM_HANTAR');
+                        }}
+                        className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                          isUnsubmitted
+                            ? 'bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-600/30'
+                            : 'bg-rose-50/70 text-rose-800 border-rose-200 hover:bg-rose-100 hover:border-rose-300'
+                        }`}
+                        title="Tandakan status murid sebagai Belum Hantar"
+                      >
+                        <XCircle className={`w-4 h-4 shrink-0 ${isUnsubmitted ? 'text-white fill-rose-500' : 'text-rose-600'}`} />
+                        <span className="whitespace-nowrap font-extrabold text-[11px]">Belum Hantar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStatusSelect(student.id, 'BELUM_DISEMAK');
+                        }}
+                        className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                          isPendingCheck
+                            ? 'bg-slate-700 text-white border-slate-700 shadow-sm shadow-slate-700/30'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
+                        }`}
+                        title="Tandakan status murid sebagai Belum Disemak"
+                      >
+                        <Clock className={`w-4 h-4 shrink-0 ${isPendingCheck ? 'text-white' : 'text-slate-500'}`} />
+                        <span className="whitespace-nowrap font-extrabold text-[11px]">Disemak</span>
+                      </button>
+                    </div>
+
                     {/* 3-State Interactive Chip */}
                     <div 
                       onClick={() => handleCardClick(student.id)}
-                      className="cursor-pointer mb-2 inline-block select-none"
+                      className="cursor-pointer mb-2 inline-block select-none touch-manipulation"
                       title="Klik untuk kitar status: BELUM DISEMAK ➔ DIHANTAR ➔ BELUM HANTAR"
                     >
                       {isSubmitted ? (

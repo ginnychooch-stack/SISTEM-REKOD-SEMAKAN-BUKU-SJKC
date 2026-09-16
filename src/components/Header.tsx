@@ -18,7 +18,9 @@ import {
   Unlock,
   Calendar,
   Settings,
-  Clock
+  Clock,
+  History,
+  RotateCcw
 } from 'lucide-react';
 import { ActiveTab, ClassGroup, Assignment } from '../types';
 import { getSubmissionStatus } from '../utils/statusUtils';
@@ -42,6 +44,7 @@ interface HeaderProps {
   availableYears: string[];
   isAdmin: boolean;
   onOpenAdmin: () => void;
+  onOpenRecovery?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -62,6 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
   availableYears,
   isAdmin,
   onOpenAdmin,
+  onOpenRecovery,
 }) => {
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
   const availableSubjects = getMainSubjectsForGrade(currentClass ? currentClass.grade : 1);
@@ -176,6 +180,19 @@ export const Header: React.FC<HeaderProps> = ({
               {soundEnabled ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
               <span className="hidden md:inline">Bunyi: {soundEnabled ? 'Hidup' : 'Senyap'}</span>
             </button>
+
+            {/* Recovery Button */}
+            {onOpenRecovery && (
+              <button
+                id="header-recovery-btn"
+                onClick={onOpenRecovery}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer bg-gradient-to-r from-orange-500/20 to-amber-500/20 hover:from-orange-500/30 hover:to-amber-500/30 text-amber-300 border border-amber-500/40"
+                title="Pusat Pemulihan Rekod Hilang & Sandaran"
+              >
+                <History className="w-3.5 h-3.5 text-amber-400" />
+                <span>Pulihkan Data</span>
+              </button>
+            )}
 
             {/* Admin Panel Button with Hidden Password (xxxx) */}
             <button

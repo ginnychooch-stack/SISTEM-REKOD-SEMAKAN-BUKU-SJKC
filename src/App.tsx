@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   INITIAL_CLASSES, 
   INITIAL_ASSIGNMENTS, 
@@ -20,7 +20,14 @@ import { RewardRoom } from './components/RewardRoom';
 import { NewTaskModal } from './components/NewTaskModal';
 import { AdminAuthModal } from './components/AdminAuthModal';
 import { AdminPanelModal } from './components/AdminPanelModal';
-import { RotateCcw, Shield } from 'lucide-react';
+import { RecoveryModal } from './components/RecoveryModal';
+import { RotateCcw, Shield, CheckCircle2, AlertTriangle, X, History } from 'lucide-react';
+import { loadRecordsFromDatabase, saveRecordsToDatabase } from './services/dbService';
+import { 
+  hasMeaningfulData, 
+  scanAllStorageForRecoverableData, 
+  archiveCurrentSnapshot 
+} from './utils/recoveryUtils';
 
 const sumNumbers = (obj?: Record<string, number>): number => {
   if (!obj) return 0;
@@ -98,6 +105,226 @@ export default function App() {
   const [selectedYear, setSelectedYear] = useState<string>(() => {
     return localStorage.getItem(STORAGE_YEAR_KEY) || '2026';
   });
+
+  // Database persistence state & notification
+  const [isSavingDb, setIsSavingDb] = useState(false);
+  const [dbNotification, setDbNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false);
+
+  // Synchronous Refs to prevent stale closure data loss and race conditions during rapid taps
+  const classesRef = useRef<ClassGroup[]>(classes);
+  const assignmentsRef = useRef<Assignment[]>(assignments);
+  const availableYearsRef = useRef<string[]>(availableYears);
+  const selectedYearRef = useRef<string>(selectedYear);
+  const saveDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    classesRef.current = classes;
+  }, [classes]);
+  useEffect(() => {
+    assignmentsRef.current = assignments;
+  }, [assignments]);
+  useEffect(() => {
+    availableYearsRef.current = availableYears;
+  }, [availableYears]);
+  useEffect(() => {
+    selectedYearRef.current = selectedYear;
+  }, [selectedYear]);
+
+  // Load from Central Server Database or Local Storage Safely on Mount
+  useEffect(() => {
+    let isMounted = true;
+    async function loadData() {
+      try {
+        const data = await loadRecordsFromDatabase();
+        if (!isMounted) return;
+
+        const serverHasData = hasMeaningfulData(data.classes, data.assignments);
+        const localHasData = hasMeaningfulData(classesRef.current, assignmentsRef.current);
+
+        if (serverHasData) {
+          // Server has active data
+          if (data.classes && data.classes.length > 0) {
+            classesRef.current = data.classes;
+            setClasses(data.classes);
+          }
+          if (data.assignments && data.assignments.length > 0) {
+            assignmentsRef.current = data.assignments;
+            setAssignments(data.assignments);
+          }
+          if (data.availableYears && data.availableYears.length > 0) {
+            availableYearsRef.current = data.availableYears;
+            setAvailableYears(data.availableYears);
+          }
+          if (data.selectedYear) {
+            selectedYearRef.current = data.selectedYear;
+            setSelectedYear(data.selectedYear);
+          }
+          archiveCurrentSnapshot(data.classes, data.assignments, 'Server Load');
+        } else if (localHasData) {
+          // Server restarted or empty, but local device has records!
+          // NEVER wipe local data with blank server data.
+          console.warn('[Safe Sync] Pangkalan data pelayan kosong. Memelihara data tempatan dan menyegerakkan semula...');
+          archiveCurrentSnapshot(classesRef.current, assignmentsRef.current, 'Penyelamatan Tempatan');
+          await saveRecordsToDatabase({
+            classes: classesRef.current,
+            assignments: assignmentsRef.current,
+            availableYears: availableYearsRef.current,
+            selectedYear: selectedYearRef.current,
+          });
+        } else {
+          // Both current server and active local storage key appear empty.
+          // AUTO-SCAN all browser storage for previous version keys (v3, v2, cache, etc.)
+          console.log('[Recovery Auto-Scan] Mengimbas storan pelayar bagi mencari rekod terdahulu...');
+          const candidates = scanAllStorageForRecoverableData();
+          if (candidates.length > 0) {
+            const best = candidates[0];
+            console.log('[Auto-Recovered] Rekod sandaran ditemui daripada:', best.sourceKey);
+            classesRef.current = best.classes;
+            assignmentsRef.current = best.assignments;
+            setClasses(best.classes);
+            setAssignments(best.assignments);
+            if (best.availableYears) {
+              availableYearsRef.current = best.availableYears;
+              setAvailableYears(best.availableYears);
+            }
+            if (best.selectedYear) {
+              selectedYearRef.current = best.selectedYear;
+              setSelectedYear(best.selectedYear);
+            }
+
+            // Immediately persist recovered data to current keys and backend
+            triggerSave(best.classes, best.assignments, best.availableYears, best.selectedYear, true);
+            archiveCurrentSnapshot(best.classes, best.assignments, 'Dipulihkan Automatik');
+
+            setDbNotification({
+              type: 'success',
+              message: `Rekod semalam berjaya dipulihkan secara automatik (${best.stats.totalAssignments} tugasan, ${best.stats.totalSubmissionsMarked} semakan)!`,
+            });
+            setTimeout(() => setDbNotification(null), 8000);
+          }
+        }
+      } catch (err) {
+        console.error('Ralat memuatkan rekod dari database:', err);
+      }
+    }
+    loadData();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Synchronously update state and persist to backend
+  const triggerSave = useCallback((
+    nextClasses: ClassGroup[],
+    nextAssignments: Assignment[],
+    customYears?: string[],
+    customSelectedYear?: string,
+    immediate = false
+  ): Promise<boolean> => {
+    // 1. Immediately update refs & React state for 0ms lag
+    classesRef.current = nextClasses;
+    assignmentsRef.current = nextAssignments;
+    if (customYears) availableYearsRef.current = customYears;
+    if (customSelectedYear) selectedYearRef.current = customSelectedYear;
+
+    setClasses(nextClasses);
+    setAssignments(nextAssignments);
+    if (customYears) setAvailableYears(customYears);
+    if (customSelectedYear) setSelectedYear(customSelectedYear);
+
+    // 2. Immediate local cache & snapshot archive
+    try {
+      localStorage.setItem(STORAGE_CLASSES_KEY, JSON.stringify(nextClasses));
+      localStorage.setItem(STORAGE_ASSIGNMENTS_KEY, JSON.stringify(nextAssignments));
+      if (customYears) localStorage.setItem(STORAGE_AVAILABLE_YEARS_KEY, JSON.stringify(customYears));
+      if (customSelectedYear) localStorage.setItem(STORAGE_YEAR_KEY, customSelectedYear);
+      archiveCurrentSnapshot(nextClasses, nextAssignments, 'Simpanan Auto');
+    } catch {}
+
+    // 3. Clear existing debounce timer
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current);
+      saveDebounceTimerRef.current = null;
+    }
+
+    const doPersist = async (): Promise<boolean> => {
+      setIsSavingDb(true);
+      try {
+        const result = await saveRecordsToDatabase({
+          classes: classesRef.current,
+          assignments: assignmentsRef.current,
+          availableYears: availableYearsRef.current,
+          selectedYear: selectedYearRef.current,
+        });
+
+        if (result.success) {
+          setDbNotification({ type: 'success', message: 'Rekod berjaya disimpan' });
+          setTimeout(() => {
+            setDbNotification((prev) => (prev?.message === 'Rekod berjaya disimpan' ? null : prev));
+          }, 3000);
+          return true;
+        } else {
+          console.error('Ralat menyimpan rekod ke database:', result.error);
+          setDbNotification({ type: 'error', message: 'Gagal menyimpan rekod. Sila cuba semula.' });
+          setTimeout(() => {
+            setDbNotification((prev) => (prev?.type === 'error' ? null : prev));
+          }, 4500);
+          return false;
+        }
+      } catch (err) {
+        console.error('Ralat simpan ke database sebenar:', err);
+        setDbNotification({ type: 'error', message: 'Gagal menyimpan rekod. Sila cuba semula.' });
+        setTimeout(() => {
+          setDbNotification((prev) => (prev?.type === 'error' ? null : prev));
+        }, 4500);
+        return false;
+      } finally {
+        setIsSavingDb(false);
+      }
+    };
+
+    if (immediate) {
+      return doPersist();
+    } else {
+      return new Promise<boolean>((resolve) => {
+        saveDebounceTimerRef.current = setTimeout(async () => {
+          const ok = await doPersist();
+          resolve(ok);
+        }, 200);
+      });
+    }
+  }, []);
+
+  const handleRestoreFromRecovery = async (data: {
+    classes: ClassGroup[];
+    assignments: Assignment[];
+    availableYears?: string[];
+    selectedYear?: string;
+  }) => {
+    const nextClasses = data.classes && data.classes.length > 0 ? data.classes : classesRef.current;
+    const nextAssignments = data.assignments || [];
+    const nextYears = data.availableYears || availableYearsRef.current;
+    const nextYear = data.selectedYear || selectedYearRef.current;
+
+    await triggerSave(nextClasses, nextAssignments, nextYears, nextYear, true);
+    archiveCurrentSnapshot(nextClasses, nextAssignments, 'Pemulihan Pengguna');
+    setDbNotification({
+      type: 'success',
+      message: `Rekod berjaya dipulihkan (${nextAssignments.length} tugasan, ${nextClasses.length} kelas)!`,
+    });
+    setTimeout(() => setDbNotification(null), 5000);
+  };
+
+  // Helper function to persist changes to the backend database
+  const persistChanges = async (
+    nextClasses: ClassGroup[],
+    nextAssignments: Assignment[],
+    customYears?: string[],
+    customSelectedYear?: string
+  ): Promise<boolean> => {
+    return await triggerSave(nextClasses, nextAssignments, customYears, customSelectedYear, true);
+  };
 
   // Current class
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
@@ -208,16 +435,20 @@ export default function App() {
     null;
 
   // Handler to create or update active task title & book type & date
-  const handleCreateOrUpdateTask = (title: string, bookType: BookType, dateAssigned?: string) => {
+  const handleCreateOrUpdateTask = async (title: string, bookType: BookType, dateAssigned?: string) => {
     const today = new Date().toISOString().split('T')[0];
     const targetDate = dateAssigned || today;
     const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
-    if (activeAssignment && activeAssignment.subject === selectedSubject && activeAssignment.classId === selectedClassId) {
-      setAssignments((prev) =>
-        prev.map((a) =>
-          a.id === activeAssignment.id ? { ...a, title, bookType, dateAssigned: targetDate } : a
-        )
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
+    );
+    const active = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+
+    if (active && active.subject === selectedSubject && active.classId === selectedClassId) {
+      nextAssignments = nextAssignments.map((a) =>
+        a.id === active.id ? { ...a, title, bookType, dateAssigned: targetDate } : a
       );
     } else {
       // Create new assignment record for this subject
@@ -244,9 +475,48 @@ export default function App() {
         submissions: initialSubs,
       };
 
-      setAssignments((prev) => [newTask, ...prev]);
+      nextAssignments = [newTask, ...nextAssignments];
       setActiveAssignmentId(newId);
     }
+
+    await triggerSave(classesRef.current, nextAssignments, undefined, undefined, true);
+  };
+
+  // Dedicated Save handler triggered by "Simpan Rekod Semakan" button
+  const handleSaveActiveRecord = async (title: string, bookType: BookType, dateAssigned: string): Promise<boolean> => {
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
+    );
+    const active = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+
+    if (active && active.subject === selectedSubject && active.classId === selectedClassId) {
+      nextAssignments = nextAssignments.map((a) =>
+        a.id === active.id ? { ...a, title, bookType, dateAssigned } : a
+      );
+    } else {
+      const newId = `task-${selectedClassId}-${selectedSubject.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      const initialSubs: Record<string, SubmissionItem> = {};
+      currentClass.students.forEach((s) => {
+        initialSubs[s.id] = { studentId: s.id, status: 'BELUM_DISEMAK', submitted: false, pointsAwarded: 0 };
+      });
+      const newTask: Assignment = {
+        id: newId,
+        classId: selectedClassId,
+        subject: selectedSubject,
+        title,
+        bookType,
+        dateAssigned,
+        dueDate: tomorrow,
+        pointsValue: 10,
+        submissions: initialSubs,
+      };
+      nextAssignments = [newTask, ...nextAssignments];
+      setActiveAssignmentId(newId);
+    }
+
+    return await triggerSave(classesRef.current, nextAssignments, undefined, undefined, true);
   };
 
   // Handler to start a fresh blank task record for the subject
@@ -276,16 +546,63 @@ export default function App() {
       submissions: initialSubs,
     };
 
-    setAssignments((prev) => [newTask, ...prev]);
+    const nextAssignments = [newTask, ...assignmentsRef.current];
     setActiveAssignmentId(newId);
+    triggerSave(classesRef.current, nextAssignments, undefined, undefined, true);
   };
 
   // Toggle single student's submission status through 3-state cycle:
   // BELUM_DISEMAK -> DIHANTAR -> BELUM_HANTAR -> BELUM_DISEMAK
-  const handleToggleSubmission = (studentId: string, nextExplicitStatus?: SubmissionStatus) => {
-    if (!activeAssignment) return;
+  const handleToggleSubmission = async (
+    studentId: string, 
+    nextExplicitStatus?: SubmissionStatus,
+    taskMeta?: { title?: string; bookType?: BookType; date?: string }
+  ) => {
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
+    );
+    let targetAssignment = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
 
-    const currentSub = activeAssignment.submissions[studentId];
+    // If activeAssignment doesn't exist yet for current class & subject, auto-create it
+    if (!targetAssignment) {
+      const newId = `task-${selectedClassId}-${selectedSubject.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+      const today = new Date().toISOString().split('T')[0];
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      const initialSubs: Record<string, SubmissionItem> = {};
+      currentClass.students.forEach((s) => {
+        initialSubs[s.id] = {
+          studentId: s.id,
+          status: 'BELUM_DISEMAK',
+          submitted: false,
+          pointsAwarded: 0,
+        };
+      });
+
+      targetAssignment = {
+        id: newId,
+        classId: selectedClassId,
+        subject: selectedSubject,
+        title: taskMeta?.title || `Semakan ${selectedSubject}`,
+        bookType: taskMeta?.bookType || 'Buku Latihan (Tulis/Kira)',
+        dateAssigned: taskMeta?.date || today,
+        dueDate: tomorrow,
+        pointsValue: 10,
+        submissions: initialSubs,
+      };
+
+      nextAssignments = [targetAssignment, ...nextAssignments];
+      setActiveAssignmentId(newId);
+    } else if (taskMeta?.title && targetAssignment.title !== taskMeta.title) {
+      targetAssignment = {
+        ...targetAssignment,
+        title: taskMeta.title,
+        bookType: taskMeta.bookType || targetAssignment.bookType,
+        dateAssigned: taskMeta.date || targetAssignment.dateAssigned,
+      };
+    }
+
+    const currentSub = targetAssignment.submissions[studentId];
     const currentStatus: SubmissionStatus = 
       (currentSub?.status === 'DIHANTAR' || currentSub?.status === 'BELUM_HANTAR' || currentSub?.status === 'BELUM_DISEMAK')
         ? currentSub.status
@@ -302,142 +619,157 @@ export default function App() {
 
     const wasSubmitted = currentStatus === 'DIHANTAR';
     const isNowSubmitted = nextStatus === 'DIHANTAR';
-    const pts = activeAssignment.pointsValue || 10;
-    const taskSubject = activeAssignment.subject || selectedSubject;
+    const pts = targetAssignment.pointsValue || 10;
+    const taskSubject = targetAssignment.subject || selectedSubject;
 
     // Update assignment submission
-    setAssignments((prev) =>
-      prev.map((a) => {
-        if (a.id !== activeAssignment.id) return a;
-        return {
-          ...a,
-          submissions: {
-            ...a.submissions,
-            [studentId]: {
-              studentId,
-              status: nextStatus,
-              submitted: isNowSubmitted,
-              submittedAt: isNowSubmitted ? (currentSub?.submittedAt || new Date().toISOString()) : undefined,
-              pointsAwarded: isNowSubmitted ? pts : 0,
-              remark: currentSub?.remark,
-              workNote: currentSub?.workNote,
-            },
+    nextAssignments = nextAssignments.map((a) => {
+      if (a.id !== targetAssignment!.id) return a;
+      return {
+        ...a,
+        submissions: {
+          ...a.submissions,
+          [studentId]: {
+            studentId,
+            status: nextStatus,
+            submitted: isNowSubmitted,
+            submittedAt: isNowSubmitted ? (currentSub?.submittedAt || new Date().toISOString()) : undefined,
+            pointsAwarded: isNowSubmitted ? pts : 0,
+            remark: currentSub?.remark,
+            workNote: currentSub?.workNote,
           },
-        };
-      })
-    );
+        },
+      };
+    });
 
     // Update student subject points & stars (Data per subjek diasingkan sepenuhnya)
+    let nextClasses = classesRef.current;
     if (wasSubmitted !== isNowSubmitted) {
-      setClasses((prevClasses) =>
-        prevClasses.map((cls) => {
-          if (cls.id !== selectedClassId) return cls;
-          return {
-            ...cls,
-            students: cls.students.map((st) => {
-              if (st.id !== studentId) return st;
-              const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
-              const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
-              const pointDiff = isNowSubmitted ? pts : -pts;
-              const starDiff = isNowSubmitted ? 1 : -1;
-              const nextSubjPoints = Math.max(0, currentSubjPoints + pointDiff);
-              const nextSubjStars = Math.max(0, currentSubjStars + starDiff);
+      nextClasses = classesRef.current.map((cls) => {
+        if (cls.id !== selectedClassId) return cls;
+        return {
+          ...cls,
+          students: cls.students.map((st) => {
+            if (st.id !== studentId) return st;
+            const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
+            const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
+            const pointDiff = isNowSubmitted ? pts : -pts;
+            const starDiff = isNowSubmitted ? 1 : -1;
+            const nextSubjPoints = Math.max(0, currentSubjPoints + pointDiff);
+            const nextSubjStars = Math.max(0, currentSubjStars + starDiff);
 
-              const updatedSubjectPoints = {
-                ...(st.subjectPoints || {}),
-                [taskSubject]: nextSubjPoints,
-              };
-              const updatedSubjectStars = {
-                ...(st.subjectStars || {}),
-                [taskSubject]: nextSubjStars,
-              };
+            const updatedSubjectPoints = {
+              ...(st.subjectPoints || {}),
+              [taskSubject]: nextSubjPoints,
+            };
+            const updatedSubjectStars = {
+              ...(st.subjectStars || {}),
+              [taskSubject]: nextSubjStars,
+            };
 
-              // Total overall points is sum across subjects
-              const totalPoints = sumNumbers(updatedSubjectPoints);
-              const totalStars = sumNumbers(updatedSubjectStars);
+            // Total overall points is sum across subjects
+            const totalPoints = sumNumbers(updatedSubjectPoints);
+            const totalStars = sumNumbers(updatedSubjectStars);
 
-              return {
-                ...st,
-                points: totalPoints,
-                stars: totalStars,
-                subjectPoints: updatedSubjectPoints,
-                subjectStars: updatedSubjectStars,
-              };
-            }),
-          };
-        })
-      );
+            return {
+              ...st,
+              points: totalPoints,
+              stars: totalStars,
+              subjectPoints: updatedSubjectPoints,
+              subjectStars: updatedSubjectStars,
+            };
+          }),
+        };
+      });
     }
+
+    // Debounced triggerSave so rapid successive taps on smartphones are safely recorded
+    await triggerSave(nextClasses, nextAssignments, undefined, undefined, false);
   };
 
   // Update teacher remark on a submission
-  const handleUpdateRemark = (studentId: string, remark: RemarkType) => {
-    if (!activeAssignment) return;
-
-    setAssignments((prev) =>
-      prev.map((a) => {
-        if (a.id !== activeAssignment.id) return a;
-        const existing = a.submissions[studentId] || {
-          studentId,
-          status: 'BELUM_DISEMAK',
-          submitted: false,
-          pointsAwarded: 0,
-        };
-        return {
-          ...a,
-          submissions: {
-            ...a.submissions,
-            [studentId]: {
-              ...existing,
-              remark: remark || undefined,
-            },
-          },
-        };
-      })
+  const handleUpdateRemark = async (studentId: string, remark: RemarkType) => {
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
     );
+    const target = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+    if (!target) return;
+
+    nextAssignments = nextAssignments.map((a) => {
+      if (a.id !== target.id) return a;
+      const existing = a.submissions[studentId] || {
+        studentId,
+        status: 'BELUM_DISEMAK',
+        submitted: false,
+        pointsAwarded: 0,
+      };
+      return {
+        ...a,
+        submissions: {
+          ...a.submissions,
+          [studentId]: {
+            ...existing,
+            remark: remark || undefined,
+          },
+        },
+      };
+    });
+
+    await triggerSave(classesRef.current, nextAssignments, undefined, undefined, false);
   };
 
   // Update student work note / ruang menaip kerja murid
-  const handleUpdateWorkNote = (studentId: string, workNote: string) => {
-    if (!activeAssignment) return;
-
-    setAssignments((prev) =>
-      prev.map((a) => {
-        if (a.id !== activeAssignment.id) return a;
-        const existing = a.submissions[studentId] || {
-          studentId,
-          status: 'BELUM_DISEMAK',
-          submitted: false,
-          pointsAwarded: 0,
-        };
-        return {
-          ...a,
-          submissions: {
-            ...a.submissions,
-            [studentId]: {
-              ...existing,
-              workNote: workNote,
-            },
-          },
-        };
-      })
+  const handleUpdateWorkNote = async (studentId: string, workNote: string) => {
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
     );
+    const target = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+    if (!target) return;
+
+    nextAssignments = nextAssignments.map((a) => {
+      if (a.id !== target.id) return a;
+      const existing = a.submissions[studentId] || {
+        studentId,
+        status: 'BELUM_DISEMAK',
+        submitted: false,
+        pointsAwarded: 0,
+      };
+      return {
+        ...a,
+        submissions: {
+          ...a.submissions,
+          [studentId]: {
+            ...existing,
+            workNote: workNote,
+          },
+        },
+      };
+    });
+
+    await triggerSave(classesRef.current, nextAssignments, undefined, undefined, false);
   };
 
   // Mark all students as submitted for active task
-  const handleMarkAllSubmitted = () => {
-    if (!activeAssignment) return;
+  const handleMarkAllSubmitted = async () => {
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
+    );
+    const target = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+    if (!target) return;
 
-    const pts = activeAssignment.pointsValue || 10;
-    const taskSubject = activeAssignment.subject || selectedSubject;
+    const pts = target.pointsValue || 10;
+    const taskSubject = target.subject || selectedSubject;
     const updatedSubmissions: Record<string, SubmissionItem> = {
-      ...activeAssignment.submissions,
+      ...target.submissions,
     };
     const nowIso = new Date().toISOString();
     const studentsGainedPoints: Record<string, number> = {};
 
     currentClass.students.forEach((student) => {
-      const currentSub = activeAssignment.submissions[student.id];
+      const currentSub = target.submissions[student.id];
       const wasSubmitted = currentSub?.status === 'DIHANTAR' || !!currentSub?.submitted;
       if (!wasSubmitted) {
         studentsGainedPoints[student.id] = pts;
@@ -453,111 +785,114 @@ export default function App() {
       };
     });
 
-    setAssignments((prev) =>
-      prev.map((a) => (a.id === activeAssignment.id ? { ...a, submissions: updatedSubmissions } : a))
+    nextAssignments = nextAssignments.map((a) =>
+      a.id === target.id ? { ...a, submissions: updatedSubmissions } : a
     );
 
-    setClasses((prevClasses) =>
-      prevClasses.map((cls) => {
-        if (cls.id !== selectedClassId) return cls;
-        return {
-          ...cls,
-          students: cls.students.map((st) => {
-            const extra = studentsGainedPoints[st.id] || 0;
-            const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
-            const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
-            const nextSubjPoints = currentSubjPoints + extra;
-            const nextSubjStars = currentSubjStars + (extra > 0 ? 1 : 0);
+    const nextClasses = classesRef.current.map((cls) => {
+      if (cls.id !== selectedClassId) return cls;
+      return {
+        ...cls,
+        students: cls.students.map((st) => {
+          const extra = studentsGainedPoints[st.id] || 0;
+          const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
+          const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
+          const nextSubjPoints = currentSubjPoints + extra;
+          const nextSubjStars = currentSubjStars + (extra > 0 ? 1 : 0);
 
-            const updatedSubjectPoints = {
-              ...(st.subjectPoints || {}),
-              [taskSubject]: nextSubjPoints,
-            };
-            const updatedSubjectStars = {
-              ...(st.subjectStars || {}),
-              [taskSubject]: nextSubjStars,
-            };
+          const updatedSubjectPoints = {
+            ...(st.subjectPoints || {}),
+            [taskSubject]: nextSubjPoints,
+          };
+          const updatedSubjectStars = {
+            ...(st.subjectStars || {}),
+            [taskSubject]: nextSubjStars,
+          };
 
-            const totalPoints = sumNumbers(updatedSubjectPoints);
-            const totalStars = sumNumbers(updatedSubjectStars);
+          const totalPoints = sumNumbers(updatedSubjectPoints);
+          const totalStars = sumNumbers(updatedSubjectStars);
 
-            return {
-              ...st,
-              points: totalPoints,
-              stars: totalStars,
-              subjectPoints: updatedSubjectPoints,
-              subjectStars: updatedSubjectStars,
-            };
-          }),
-        };
-      })
-    );
+          return {
+            ...st,
+            points: totalPoints,
+            stars: totalStars,
+            subjectPoints: updatedSubjectPoints,
+            subjectStars: updatedSubjectStars,
+          };
+        }),
+      };
+    });
+
+    await triggerSave(nextClasses, nextAssignments, undefined, undefined, true);
   };
 
   // Reset all submissions for active task back to BELUM_DISEMAK
-  const handleResetSubmissions = () => {
-    if (!activeAssignment) return;
+  const handleResetSubmissions = async () => {
+    let nextAssignments = [...assignmentsRef.current];
+    const currentClsSubjectAssignments = nextAssignments.filter(
+      (a) => a.classId === selectedClassId && a.subject === selectedSubject
+    );
+    const target = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+    if (!target) return;
 
-    const taskSubject = activeAssignment.subject || selectedSubject;
+    const taskSubject = target.subject || selectedSubject;
     const studentsLostPoints: Record<string, number> = {};
 
     currentClass.students.forEach((student) => {
-      const sub = activeAssignment.submissions[student.id];
+      const sub = target.submissions[student.id];
       if (sub?.submitted || sub?.status === 'DIHANTAR') {
-        studentsLostPoints[student.id] = sub.pointsAwarded || activeAssignment.pointsValue || 10;
+        studentsLostPoints[student.id] = sub.pointsAwarded || target.pointsValue || 10;
       }
     });
 
-    setAssignments((prev) =>
-      prev.map((a) => {
-        if (a.id !== activeAssignment.id) return a;
-        const resetSubs: Record<string, SubmissionItem> = {};
-        currentClass.students.forEach((s) => {
-          resetSubs[s.id] = { studentId: s.id, status: 'BELUM_DISEMAK', submitted: false, pointsAwarded: 0 };
-        });
-        return { ...a, submissions: resetSubs };
-      })
-    );
+    nextAssignments = nextAssignments.map((a) => {
+      if (a.id !== target.id) return a;
+      const resetSubs: Record<string, SubmissionItem> = {};
+      currentClass.students.forEach((s) => {
+        resetSubs[s.id] = { studentId: s.id, status: 'BELUM_DISEMAK', submitted: false, pointsAwarded: 0 };
+      });
+      return { ...a, submissions: resetSubs };
+    });
 
-    setClasses((prevClasses) =>
-      prevClasses.map((cls) => {
-        if (cls.id !== selectedClassId) return cls;
-        return {
-          ...cls,
-          students: cls.students.map((st) => {
-            const lost = studentsLostPoints[st.id] || 0;
-            const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
-            const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
-            const nextSubjPoints = Math.max(0, currentSubjPoints - lost);
-            const nextSubjStars = Math.max(0, currentSubjStars - (lost > 0 ? 1 : 0));
+    const nextClasses = classesRef.current.map((cls) => {
+      if (cls.id !== selectedClassId) return cls;
+      return {
+        ...cls,
+        students: cls.students.map((st) => {
+          const lost = studentsLostPoints[st.id] || 0;
+          const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
+          const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
+          const nextSubjPoints = Math.max(0, currentSubjPoints - lost);
+          const nextSubjStars = Math.max(0, currentSubjStars - (lost > 0 ? 1 : 0));
 
-            const updatedSubjectPoints = {
-              ...(st.subjectPoints || {}),
-              [taskSubject]: nextSubjPoints,
-            };
-            const updatedSubjectStars = {
-              ...(st.subjectStars || {}),
-              [taskSubject]: nextSubjStars,
-            };
+          const updatedSubjectPoints = {
+            ...(st.subjectPoints || {}),
+            [taskSubject]: nextSubjPoints,
+          };
+          const updatedSubjectStars = {
+            ...(st.subjectStars || {}),
+            [taskSubject]: nextSubjStars,
+          };
 
-            const totalPoints = sumNumbers(updatedSubjectPoints);
-            const totalStars = sumNumbers(updatedSubjectStars);
+          const totalPoints = sumNumbers(updatedSubjectPoints);
+          const totalStars = sumNumbers(updatedSubjectStars);
 
-            return {
-              ...st,
-              points: totalPoints,
-              stars: totalStars,
-              subjectPoints: updatedSubjectPoints,
-              subjectStars: updatedSubjectStars,
-            };
-          }),
-        };
-      })
-    );
+          return {
+            ...st,
+            points: totalPoints,
+            stars: totalStars,
+            subjectPoints: updatedSubjectPoints,
+            subjectStars: updatedSubjectStars,
+          };
+        }),
+      };
+    });
+
+    await triggerSave(nextClasses, nextAssignments, undefined, undefined, true);
   };
 
   // Create new task from Modal
-  const handleCreateTask = (taskData: Omit<Assignment, 'id' | 'submissions'>) => {
+  const handleCreateTask = async (taskData: Omit<Assignment, 'id' | 'submissions'>) => {
     const newId = `task-${Date.now()}`;
     const initialSubs: Record<string, SubmissionItem> = {};
     currentClass.students.forEach((s) => {
@@ -570,103 +905,135 @@ export default function App() {
       submissions: initialSubs,
     };
 
-    setAssignments((prev) => [newTask, ...prev]);
+    const nextAssignments = [newTask, ...assignmentsRef.current];
     setSelectedSubject(taskData.subject);
     setActiveAssignmentId(newId);
     setActiveTab('rekod');
+    await triggerSave(classesRef.current, nextAssignments, undefined, undefined, true);
   };
 
   // Add bonus points strictly to specific subject
-  const handleAddStudentPoints = (studentId: string, amount: number, subject: string) => {
-    setClasses((prev) =>
-      prev.map((cls) => {
-        if (cls.id !== selectedClassId) return cls;
-        return {
-          ...cls,
-          students: cls.students.map((s) => {
-            if (s.id !== studentId) return s;
-            const currentSubjPoints = s.subjectPoints?.[subject] || 0;
-            const nextSubjPoints = currentSubjPoints + amount;
-            const updatedSubjectPoints = {
-              ...(s.subjectPoints || {}),
-              [subject]: nextSubjPoints,
-            };
-            const totalPoints = sumNumbers(updatedSubjectPoints);
-            return {
-              ...s,
-              points: totalPoints,
-              subjectPoints: updatedSubjectPoints,
-            };
-          }),
-        };
-      })
-    );
+  const handleAddStudentPoints = async (studentId: string, amount: number, subject: string) => {
+    const nextClasses = classesRef.current.map((cls) => {
+      if (cls.id !== selectedClassId) return cls;
+      return {
+        ...cls,
+        students: cls.students.map((s) => {
+          if (s.id !== studentId) return s;
+          const currentSubjPoints = s.subjectPoints?.[subject] || 0;
+          const nextSubjPoints = currentSubjPoints + amount;
+          const updatedSubjectPoints = {
+            ...(s.subjectPoints || {}),
+            [subject]: nextSubjPoints,
+          };
+          const totalPoints = sumNumbers(updatedSubjectPoints);
+          return {
+            ...s,
+            points: totalPoints,
+            subjectPoints: updatedSubjectPoints,
+          };
+        }),
+      };
+    });
+    await triggerSave(nextClasses, assignmentsRef.current, undefined, undefined, false);
   };
 
   // Deduct points (e.g. redemption) strictly from specific subject
-  const handleDeductStudentPoints = (studentId: string, amount: number, subject: string) => {
-    setClasses((prev) =>
-      prev.map((cls) => {
-        if (cls.id !== selectedClassId) return cls;
-        return {
-          ...cls,
-          students: cls.students.map((s) => {
-            if (s.id !== studentId) return s;
-            const currentSubjPoints = s.subjectPoints?.[subject] || 0;
-            const nextSubjPoints = Math.max(0, currentSubjPoints - amount);
-            const updatedSubjectPoints = {
-              ...(s.subjectPoints || {}),
-              [subject]: nextSubjPoints,
-            };
-            const totalPoints = sumNumbers(updatedSubjectPoints);
-            return {
-              ...s,
-              points: totalPoints,
-              subjectPoints: updatedSubjectPoints,
-            };
-          }),
-        };
-      })
-    );
+  const handleDeductStudentPoints = async (studentId: string, amount: number, subject: string) => {
+    const nextClasses = classesRef.current.map((cls) => {
+      if (cls.id !== selectedClassId) return cls;
+      return {
+        ...cls,
+        students: cls.students.map((s) => {
+          if (s.id !== studentId) return s;
+          const currentSubjPoints = s.subjectPoints?.[subject] || 0;
+          const nextSubjPoints = Math.max(0, currentSubjPoints - amount);
+          const updatedSubjectPoints = {
+            ...(s.subjectPoints || {}),
+            [subject]: nextSubjPoints,
+          };
+          const totalPoints = sumNumbers(updatedSubjectPoints);
+          return {
+            ...s,
+            points: totalPoints,
+            subjectPoints: updatedSubjectPoints,
+          };
+        }),
+      };
+    });
+    await triggerSave(nextClasses, assignmentsRef.current, undefined, undefined, false);
   };
 
   // Reset all to clean initial state
-  const handleRestoreDemoData = () => {
+  const handleRestoreDemoData = async () => {
     if (confirm('Adakah anda ingin mengembalikan data asal dan set semula sistem?')) {
       localStorage.clear();
-      setClasses(INITIAL_CLASSES);
-      setAssignments(INITIAL_ASSIGNMENTS);
       setSelectedClassId('class-1a');
       setSelectedSubject('Bahasa Melayu');
       setActiveAssignmentId('');
       setSelectedYear('2026');
       setAvailableYears(['2026', '2027', '2028', '2029']);
+      await persistChanges(INITIAL_CLASSES, INITIAL_ASSIGNMENTS, ['2026', '2027', '2028', '2029'], '2026');
     }
   };
 
-  const handleRestoreBackup = (backup: {
+  const handleRestoreBackup = async (backup: {
     classes: ClassGroup[];
     assignments: Assignment[];
     availableYears?: string[];
     selectedYear?: string;
   }) => {
+    const nextClasses = backup.classes && backup.classes.length > 0 ? backup.classes : classes;
+    const nextAssignments = backup.assignments || assignments;
+    const nextYears = backup.availableYears && backup.availableYears.length > 0 ? backup.availableYears : availableYears;
+    const nextYear = backup.selectedYear || selectedYear;
+
     if (backup.classes && backup.classes.length > 0) {
-      setClasses(backup.classes);
       setSelectedClassId(backup.classes[0].id);
     }
-    if (backup.assignments) {
-      setAssignments(backup.assignments);
-    }
-    if (backup.availableYears && backup.availableYears.length > 0) {
-      setAvailableYears(backup.availableYears);
-    }
-    if (backup.selectedYear) {
-      setSelectedYear(backup.selectedYear);
-    }
+    await persistChanges(nextClasses, nextAssignments, nextYears, nextYear);
   };
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-800 flex flex-col font-sans antialiased">
+      {/* Database Persistence Notification Toast (Z-index 9999, non-blocking) */}
+      {dbNotification && (
+        <aside
+          role="status"
+          aria-live="polite"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none px-4 w-full max-w-md"
+        >
+          <div
+            className={`pointer-events-auto px-4 py-3 rounded-2xl shadow-2xl flex items-center justify-between gap-3 text-sm font-bold text-white border transition-all ${
+              dbNotification.type === 'success'
+                ? 'bg-emerald-600 border-emerald-400/90 shadow-emerald-950/30'
+                : 'bg-rose-600 border-rose-400/90 shadow-rose-950/30'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              {dbNotification.type === 'success' ? (
+                <span className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                  <CheckCircle2 className="w-4 h-4 text-white" />
+                </span>
+              ) : (
+                <span className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-4 h-4 text-white" />
+                </span>
+              )}
+              <span className="text-sm font-extrabold">{dbNotification.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDbNotification(null)}
+              className="text-white/80 hover:text-white text-xs p-1 rounded-lg bg-black/20 hover:bg-black/30 cursor-pointer touch-manipulation flex items-center justify-center"
+              aria-label="Tutup notifikasi"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </aside>
+      )}
+
       {/* Visual Header with Subject Selection & Hero Banner */}
       <Header
         currentTab={activeTab}
@@ -692,6 +1059,7 @@ export default function App() {
         availableYears={availableYears}
         isAdmin={isAdmin}
         onOpenAdmin={handleOpenAdmin}
+        onOpenRecovery={() => setIsRecoveryModalOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -712,6 +1080,9 @@ export default function App() {
             onMarkAllSubmitted={handleMarkAllSubmitted}
             onResetSubmissions={handleResetSubmissions}
             soundEnabled={soundEnabled}
+            isSaving={isSavingDb}
+            onSaveRecord={handleSaveActiveRecord}
+            onOpenRecovery={() => setIsRecoveryModalOpen(true)}
           />
         )}
 
@@ -806,6 +1177,13 @@ export default function App() {
         assignments={assignments}
         onRestoreBackup={handleRestoreBackup}
         onLogout={handleLogoutAdmin}
+      />
+
+      {/* Pusat Pemulihan Rekod Modal */}
+      <RecoveryModal
+        isOpen={isRecoveryModalOpen}
+        onClose={() => setIsRecoveryModalOpen(false)}
+        onRestore={handleRestoreFromRecovery}
       />
     </div>
   );
