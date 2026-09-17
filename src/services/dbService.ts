@@ -85,19 +85,12 @@ export async function loadRecordsFromDatabase(): Promise<{
   }
 }
 
-/**
- * Menyimpan rekod secara berterusan terus ke database pelayan menggunakan async/await.
- * Menunggu pengesahan daripada database sebelum memaparkan status kejayaan.
- */
-export async function saveRecordsToDatabase(payload: DatabasePayload): Promise<SaveResult> {
-  try {
-    // Kemaskini sandaran setempat segera
-    try {
-      localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(payload));
-    } catch (e) {
-      console.warn('Gagal mengemas kini sandaran setempat:', e);
-    }
+let isSavingInFlight = false;
+let pendingPayload: DatabasePayload | null = null;
+let pendingResolvers: Array<(result: SaveResult) => void> = [];
 
+async function executeNetworkSave(payload: DatabasePayload, attempt = 1): Promise<SaveResult> {
+  try {
     const res = await fetch('/api/records', {
       method: 'POST',
       headers: {
@@ -109,12 +102,16 @@ export async function saveRecordsToDatabase(payload: DatabasePayload): Promise<S
 
     if (!res.ok) {
       const errText = await res.text().catch(() => res.statusText);
-      throw new Error(`Database save failed with HTTP ${res.status}: ${errText}`);
+      // Retry once on 500 or network glitch
+      if (attempt < 2 && res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 400));
+        return executeNetworkSave(payload, attempt + 1);
+      }
+      throw new Error(`Pelayan HTTP ${res.status}: ${errText}`);
     }
 
     const json = await res.json();
     if (json.success) {
-      console.log('Rekod berjaya disimpan ke database:', new Date().toLocaleTimeString());
       return {
         success: true,
         message: 'Rekod berjaya disimpan',
@@ -123,13 +120,54 @@ export async function saveRecordsToDatabase(payload: DatabasePayload): Promise<S
       throw new Error(json.error || 'Pelayan menolak penyimpanan rekod.');
     }
   } catch (err: any) {
-    // Log error sebenar dalam console seperti arahan pengguna
+    if (attempt < 2) {
+      await new Promise((r) => setTimeout(r, 400));
+      return executeNetworkSave(payload, attempt + 1);
+    }
     console.error('Ralat simpan ke database sebenar:', err);
-
     return {
       success: false,
       message: 'Gagal menyimpan rekod. Sila cuba semula.',
       error: err?.message || String(err),
     };
   }
+}
+
+async function processQueue() {
+  if (isSavingInFlight || !pendingPayload) return;
+
+  isSavingInFlight = true;
+  const currentPayload = pendingPayload;
+  const currentResolvers = [...pendingResolvers];
+  pendingPayload = null;
+  pendingResolvers = [];
+
+  const result = await executeNetworkSave(currentPayload);
+
+  isSavingInFlight = false;
+  currentResolvers.forEach((resolve) => resolve(result));
+
+  // If new updates arrived while the previous request was in flight, process next
+  if (pendingPayload) {
+    processQueue();
+  }
+}
+
+/**
+ * Menyimpan rekod secara berterusan terus ke database pelayan menggunakan async/await.
+ * Menunggu pengesahan daripada database sebelum memaparkan status kejayaan.
+ */
+export async function saveRecordsToDatabase(payload: DatabasePayload): Promise<SaveResult> {
+  // Kemaskini sandaran setempat segera (offline fallback cache)
+  try {
+    localStorage.setItem(LOCAL_STORAGE_BACKUP_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('Gagal mengemas kini sandaran setempat:', e);
+  }
+
+  return new Promise<SaveResult>((resolve) => {
+    pendingPayload = payload;
+    pendingResolvers.push(resolve);
+    processQueue();
+  });
 }

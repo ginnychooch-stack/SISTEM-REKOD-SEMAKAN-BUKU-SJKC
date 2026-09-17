@@ -46,7 +46,7 @@ interface RecordViewProps {
   onResetSubmissions: () => void;
   soundEnabled: boolean;
   isSaving?: boolean;
-  onSaveRecord?: (title: string, bookType: BookType, dateAssigned: string) => Promise<boolean>;
+  onSaveRecord?: (title: string, bookType: BookType, dateAssigned: string, saveAsNew?: boolean) => Promise<boolean>;
   onOpenRecovery?: () => void;
 }
 
@@ -180,7 +180,13 @@ export const RecordView: React.FC<RecordViewProps> = ({
     setTaskTitle(val);
     if (val.trim()) {
       setTitleError(null);
-      onCreateOrUpdateTask(val.trim(), bookType, taskDate);
+    }
+  };
+
+  const handleTitleBlur = () => {
+    if (taskTitle.trim()) {
+      const effective = getEffectiveTitle();
+      onCreateOrUpdateTask(effective, bookType, taskDate);
     }
   };
 
@@ -240,18 +246,19 @@ export const RecordView: React.FC<RecordViewProps> = ({
     onMarkAllSubmitted();
   };
 
-  const handleSaveRecord = async () => {
+  const handleSaveRecord = async (saveAsNew = false) => {
     const effective = getEffectiveTitle();
     if (!taskTitle.trim()) {
       setTaskTitle(effective);
     }
-    onCreateOrUpdateTask(effective, bookType, taskDate);
 
     if (onSaveRecord) {
-      const ok = await onSaveRecord(effective, bookType, taskDate);
+      const ok = await onSaveRecord(effective, bookType, taskDate, saveAsNew);
       if (ok) {
         setSaveSuccessToast(
-          `Rekod semakan "${effective}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
+          saveAsNew
+            ? `Tugasan baharu "${effective}" (${formatDisplayDate(taskDate)}) berjaya disimpan sebagai rekod baharu!`
+            : `Rekod semakan "${effective}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
         );
         playSuccessDing(soundEnabled);
         setTimeout(() => {
@@ -259,6 +266,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
         }, 3500);
       }
     } else {
+      onCreateOrUpdateTask(effective, bookType, taskDate);
       setSaveSuccessToast(
         `Rekod semakan "${effective}" (${formatDisplayDate(taskDate)}) bagi subjek ${selectedSubject} telah berjaya disimpan!`
       );
@@ -429,6 +437,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
                 placeholder="Masukkan tajuk tugasan..."
                 value={taskTitle}
                 onChange={(e) => handleTitleChange(e.target.value)}
+                onBlur={handleTitleBlur}
                 className={`w-full px-4 py-2.5 rounded-xl text-sm font-bold bg-slate-800 text-white border transition-all focus:outline-none placeholder:text-slate-500 ${
                   titleError
                     ? 'border-rose-500 ring-2 ring-rose-500/40 bg-rose-950/20'
@@ -522,9 +531,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
               id="save-record-btn"
               type="button"
               disabled={isSaving}
-              onClick={handleSaveRecord}
+              onClick={() => handleSaveRecord(false)}
               className="min-h-[44px] flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-md shadow-emerald-700/20 transition-all cursor-pointer border border-emerald-400/40 touch-manipulation disabled:opacity-60 disabled:cursor-not-allowed"
-              title="Simpan rekod semakan tugasan ini terus ke pangkalan data"
+              title="Simpan atau kemas kini rekod semakan tugasan ini terus ke pangkalan data"
             >
               {isSaving ? (
                 <>
@@ -538,6 +547,20 @@ export const RecordView: React.FC<RecordViewProps> = ({
                 </>
               )}
             </button>
+
+            {assignments.length > 0 && (
+              <button
+                id="save-as-new-record-btn"
+                type="button"
+                disabled={isSaving}
+                onClick={() => handleSaveRecord(true)}
+                className="min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-teal-700 hover:bg-teal-600 active:scale-95 text-white shadow-xs transition-all cursor-pointer border border-teal-500/30 touch-manipulation disabled:opacity-60"
+                title="Simpan status semakan ini sebagai rekod tugasan baharu yang berasingan (rekod sedia ada tidak akan dipadam)"
+              >
+                <PlusCircle className="w-4 h-4 text-teal-200" />
+                <span>Simpan Sebagai Tugasan Baharu</span>
+              </button>
+            )}
 
             <button
               id="mark-all-btn"

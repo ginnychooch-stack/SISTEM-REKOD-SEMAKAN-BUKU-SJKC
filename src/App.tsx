@@ -434,8 +434,13 @@ export default function App() {
     currentClassSubjectAssignments[0] ||
     null;
 
-  // Handler to create or update active task title & book type & date
-  const handleCreateOrUpdateTask = async (title: string, bookType: BookType, dateAssigned?: string) => {
+  // Handler to create or update active task title & book type & date (debounced for typing)
+  const handleCreateOrUpdateTask = async (
+    title: string, 
+    bookType: BookType, 
+    dateAssigned?: string,
+    forceAsNew = false
+  ) => {
     const today = new Date().toISOString().split('T')[0];
     const targetDate = dateAssigned || today;
     const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
@@ -444,7 +449,9 @@ export default function App() {
     const currentClsSubjectAssignments = nextAssignments.filter(
       (a) => a.classId === selectedClassId && a.subject === selectedSubject
     );
-    const active = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+    const active = (!forceAsNew && activeAssignmentId)
+      ? currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId)
+      : null;
 
     if (active && active.subject === selectedSubject && active.classId === selectedClassId) {
       nextAssignments = nextAssignments.map((a) =>
@@ -467,7 +474,7 @@ export default function App() {
         id: newId,
         classId: selectedClassId,
         subject: selectedSubject,
-        title,
+        title: title || `Semakan ${selectedSubject} (${targetDate.split('-').reverse().join('/')})`,
         bookType,
         dateAssigned: targetDate,
         dueDate: tomorrow,
@@ -479,39 +486,58 @@ export default function App() {
       setActiveAssignmentId(newId);
     }
 
-    await triggerSave(classesRef.current, nextAssignments, undefined, undefined, true);
+    // Debounced triggerSave to avoid server flooding while typing
+    await triggerSave(classesRef.current, nextAssignments, undefined, undefined, false);
   };
 
   // Dedicated Save handler triggered by "Simpan Rekod Semakan" button
-  const handleSaveActiveRecord = async (title: string, bookType: BookType, dateAssigned: string): Promise<boolean> => {
+  const handleSaveActiveRecord = async (
+    title: string, 
+    bookType: BookType, 
+    dateAssigned: string,
+    saveAsNew = false
+  ): Promise<boolean> => {
     let nextAssignments = [...assignmentsRef.current];
     const currentClsSubjectAssignments = nextAssignments.filter(
       (a) => a.classId === selectedClassId && a.subject === selectedSubject
     );
-    const active = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
+    const active = (!saveAsNew && activeAssignmentId)
+      ? currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId)
+      : null;
 
     if (active && active.subject === selectedSubject && active.classId === selectedClassId) {
       nextAssignments = nextAssignments.map((a) =>
         a.id === active.id ? { ...a, title, bookType, dateAssigned } : a
       );
     } else {
+      // Save as brand new assignment record without overwriting previous records
       const newId = `task-${selectedClassId}-${selectedSubject.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
       const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      
+      // Preserve student submission state that teacher just marked on screen
+      const currentDisplayedTask = currentClsSubjectAssignments.find((a) => a.id === activeAssignmentId) || currentClsSubjectAssignments[0];
       const initialSubs: Record<string, SubmissionItem> = {};
       currentClass.students.forEach((s) => {
-        initialSubs[s.id] = { studentId: s.id, status: 'BELUM_DISEMAK', submitted: false, pointsAwarded: 0 };
+        const existingSub = currentDisplayedTask?.submissions?.[s.id];
+        if (existingSub) {
+          initialSubs[s.id] = { ...existingSub };
+        } else {
+          initialSubs[s.id] = { studentId: s.id, status: 'BELUM_DISEMAK', submitted: false, pointsAwarded: 0 };
+        }
       });
+
       const newTask: Assignment = {
         id: newId,
         classId: selectedClassId,
         subject: selectedSubject,
-        title,
+        title: title || `Semakan ${selectedSubject} (${dateAssigned.split('-').reverse().join('/')})`,
         bookType,
         dateAssigned,
         dueDate: tomorrow,
         pointsValue: 10,
         submissions: initialSubs,
       };
+
       nextAssignments = [newTask, ...nextAssignments];
       setActiveAssignmentId(newId);
     }
@@ -521,8 +547,9 @@ export default function App() {
 
   // Handler to start a fresh blank task record for the subject
   const handleNewTaskRequest = () => {
-    const newId = `task-${selectedClassId}-${selectedSubject.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
     const today = new Date().toISOString().split('T')[0];
+    const formattedDate = today.split('-').reverse().join('/');
+    const newId = `task-${selectedClassId}-${selectedSubject.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
     const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
     const initialSubs: Record<string, SubmissionItem> = {};
     currentClass.students.forEach((s) => {
@@ -538,7 +565,7 @@ export default function App() {
       id: newId,
       classId: selectedClassId,
       subject: selectedSubject,
-      title: '',
+      title: `Semakan ${selectedSubject} (${formattedDate})`,
       bookType: 'Buku Latihan (Tulis/Kira)',
       dateAssigned: today,
       dueDate: tomorrow,

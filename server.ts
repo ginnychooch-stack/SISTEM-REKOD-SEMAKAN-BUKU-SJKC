@@ -128,32 +128,69 @@ function readDatabase() {
   }
 }
 
-function writeDatabase(data: any) {
-  ensureDatabaseFile();
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
-  const serialized = JSON.stringify({ ...data, updatedAt: new Date().toISOString() }, null, 2);
-  fs.writeFileSync(tempFile, serialized, 'utf-8');
-  fs.renameSync(tempFile, DB_FILE);
+let writeQueue: Promise<any> = Promise.resolve();
 
-  // Write a persistent timestamped backup file if data has assignments or points
-  try {
-    const backupFile = path.join(BACKUPS_DIR, `backup_${timestamp}.json`);
-    fs.writeFileSync(backupFile, serialized, 'utf-8');
+function writeDatabaseAtomic(data: any): Promise<void> {
+  return new Promise((resolve, reject) => {
+    writeQueue = writeQueue.then(() => {
+      try {
+        ensureDatabaseFile();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const randomSalt = Math.random().toString(36).substring(2, 8);
+        const tempFile = `${DB_FILE}.tmp.${Date.now()}_${process.pid}_${randomSalt}`;
+        const serialized = JSON.stringify({ ...data, updatedAt: new Date().toISOString() }, null, 2);
 
-    // Retain maximum 20 latest backups
-    const files = fs.readdirSync(BACKUPS_DIR).filter((f) => f.endsWith('.json')).sort();
-    if (files.length > 20) {
-      const toDelete = files.slice(0, files.length - 20);
-      toDelete.forEach((f) => {
+        fs.writeFileSync(tempFile, serialized, 'utf-8');
+
+        // Robust atomic rename with retries for container environments
+        let renamed = false;
+        let attempts = 0;
+        while (!renamed && attempts < 5) {
+          try {
+            attempts++;
+            fs.renameSync(tempFile, DB_FILE);
+            renamed = true;
+          } catch (rErr) {
+            if (attempts >= 5) throw rErr;
+            // Short busy-wait before retry
+            const waitEnd = Date.now() + 25;
+            while (Date.now() < waitEnd) {}
+          }
+        }
+
+        // Write persistent timestamped backup file
         try {
-          fs.unlinkSync(path.join(BACKUPS_DIR, f));
-        } catch {}
-      });
-    }
-  } catch (bErr) {
-    console.warn('Failed to write backup snapshot file:', bErr);
-  }
+          const backupFile = path.join(BACKUPS_DIR, `backup_${timestamp}.json`);
+          fs.writeFileSync(backupFile, serialized, 'utf-8');
+
+          // Retain maximum 25 latest backups
+          const files = fs.readdirSync(BACKUPS_DIR).filter((f) => f.endsWith('.json')).sort();
+          if (files.length > 25) {
+            const toDelete = files.slice(0, files.length - 25);
+            toDelete.forEach((f) => {
+              try {
+                fs.unlinkSync(path.join(BACKUPS_DIR, f));
+              } catch {}
+            });
+          }
+        } catch (bErr) {
+          console.warn('[Backup Notice] Gagal menulis salinan fail arkib:', bErr);
+        }
+
+        resolve();
+      } catch (err) {
+        console.error('[Database Write Error] Gagal menulis ke fail database:', err);
+        reject(err);
+      }
+    }).catch((qErr) => {
+      console.error('[Write Queue Error]:', qErr);
+      reject(qErr);
+    });
+  });
+}
+
+function writeDatabase(data: any) {
+  return writeDatabaseAtomic(data);
 }
 
 async function startServer() {
@@ -202,7 +239,7 @@ async function startServer() {
   });
 
   // POST /api/records - Save records across desktop & mobile
-  app.post("/api/records", (req, res) => {
+  app.post("/api/records", async (req, res) => {
     try {
       const { classes, assignments, availableYears, selectedYear } = req.body;
       if (!classes || !assignments) {
@@ -214,19 +251,21 @@ async function startServer() {
 
       const existing = readDatabase();
       const updated = {
-        classes: classes || existing.classes,
-        assignments: assignments || existing.assignments,
+        classes: classes && classes.length > 0 ? classes : existing.classes,
+        assignments: Array.isArray(assignments) ? assignments : existing.assignments,
         availableYears: availableYears || existing.availableYears,
         selectedYear: selectedYear || existing.selectedYear,
       };
 
-      writeDatabase(updated);
+      await writeDatabase(updated);
 
-      console.log(`[Database Saved] ${assignments.length} assignments, ${classes.length} classes at ${new Date().toISOString()}`);
+      console.log(`[Database Saved] ${updated.assignments.length} assignments, ${updated.classes.length} classes at ${new Date().toISOString()}`);
 
       res.json({
         success: true,
         message: "Rekod berjaya disimpan",
+        totalAssignments: updated.assignments.length,
+        totalClasses: updated.classes.length,
         updatedAt: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -240,7 +279,7 @@ async function startServer() {
   });
 
   // POST /api/records/reset - Reset database to default
-  app.post("/api/records/reset", (_req, res) => {
+  app.post("/api/records/reset", async (_req, res) => {
     try {
       const initialData = {
         classes: DEFAULT_CLASSES,
@@ -249,7 +288,7 @@ async function startServer() {
         selectedYear: '2026',
         updatedAt: new Date().toISOString(),
       };
-      writeDatabase(initialData);
+      await writeDatabase(initialData);
       res.json({ success: true, message: "Pangkalan data telah diset semula." });
     } catch (err: any) {
       console.error("API POST /api/records/reset error:", err);
