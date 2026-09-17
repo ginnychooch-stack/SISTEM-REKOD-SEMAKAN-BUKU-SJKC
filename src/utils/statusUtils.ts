@@ -8,7 +8,12 @@ import { SubmissionItem, SubmissionStatus } from '../types';
  */
 export function getSubmissionStatus(item?: SubmissionItem): SubmissionStatus {
   if (!item) return 'BELUM_DISEMAK';
-  if (item.status === 'DIHANTAR' || item.status === 'BELUM_HANTAR' || item.status === 'BELUM_DISEMAK') {
+  if (
+    item.status === 'DIHANTAR' || 
+    item.status === 'TIDAK_SIAP' || 
+    item.status === 'BELUM_HANTAR' || 
+    item.status === 'BELUM_DISEMAK'
+  ) {
     return item.status;
   }
   if (item.submitted === true) {
@@ -19,13 +24,15 @@ export function getSubmissionStatus(item?: SubmissionItem): SubmissionStatus {
 
 /**
  * Returns the next status in the cycle:
- * BELUM_DISEMAK -> DIHANTAR -> BELUM_HANTAR -> BELUM_DISEMAK
+ * BELUM_DISEMAK -> DIHANTAR -> TIDAK_SIAP -> BELUM_HANTAR -> BELUM_DISEMAK
  */
 export function getNextStatus(current: SubmissionStatus): SubmissionStatus {
   switch (current) {
     case 'BELUM_DISEMAK':
       return 'DIHANTAR';
     case 'DIHANTAR':
+      return 'TIDAK_SIAP';
+    case 'TIDAK_SIAP':
       return 'BELUM_HANTAR';
     case 'BELUM_HANTAR':
       return 'BELUM_DISEMAK';

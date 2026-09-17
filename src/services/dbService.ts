@@ -1,8 +1,7 @@
 import { ClassGroup, Assignment, SubmissionStatus } from '../types';
 import { INITIAL_CLASSES } from '../data/initialData';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-export type NormalizedStatus = 'hantar' | 'belum_hantar' | 'disemak';
+export type NormalizedStatus = 'hantar' | 'belum_hantar' | 'disemak' | 'tidak_siap';
 
 export interface StudentRecordPayload {
   student_id: string;
@@ -12,6 +11,7 @@ export interface StudentRecordPayload {
   points_awarded?: number;
   remark?: string | null;
   work_note?: string | null;
+  incomplete_note?: string | null;
   task_title?: string | null;
   class_id?: string | null;
 }
@@ -34,38 +34,31 @@ export interface SaveResult {
 
 const LOCAL_STORAGE_BACKUP_KEY = 'srsm_db_cache_v5';
 
-// Inisialisasi Supabase Client sekiranya pembolehubah persekitaran dibekalkan (cth: di Netlify)
-const env = (import.meta as any)?.env || {};
-const supabaseUrl = env.VITE_SUPABASE_URL;
-const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY;
-
-export let supabase: SupabaseClient | null = null;
-if (supabaseUrl && supabaseAnonKey && typeof supabaseUrl === 'string' && supabaseUrl.startsWith('http')) {
-  try {
-    supabase = createClient(supabaseUrl, supabaseAnonKey);
-    console.log('[Supabase Client] Berjaya disambungkan ke Supabase URL:', supabaseUrl);
-  } catch (initErr) {
-    console.warn('[Supabase Client] Ralat memulakan client Supabase:', initErr);
-  }
-}
-
 /**
- * Menukarkan sebarang format status kepada status piawai ('hantar', 'belum_hantar', 'disemak')
+ * Menukarkan sebarang format status kepada status piawai ('hantar', 'belum_hantar', 'disemak', 'tidak_siap')
  */
 export function normalizeStatus(status?: string): NormalizedStatus {
   if (!status) return 'disemak';
   const clean = String(status).toLowerCase().trim();
   if (clean === 'dihantar' || clean === 'hantar') return 'hantar';
+  if (
+    clean === 'tidak_siap' || 
+    clean === 'tidak siap' || 
+    clean === 'hantar_tak_siap' || 
+    clean === 'hantar_tidak_siap' ||
+    clean === 'dihantar_tidak_siap'
+  ) return 'tidak_siap';
   if (clean === 'belum_hantar' || clean === 'belum hantar') return 'belum_hantar';
   return 'disemak';
 }
 
 /**
- * Menukarkan status pangkalan data ('hantar', 'belum_hantar', 'disemak') kepada SubmissionStatus sistem UI
+ * Menukarkan status pangkalan data ('hantar', 'belum_hantar', 'disemak', 'tidak_siap') kepada SubmissionStatus sistem UI
  */
 export function toInternalStatus(status?: string): SubmissionStatus {
   const norm = normalizeStatus(status);
   if (norm === 'hantar') return 'DIHANTAR';
+  if (norm === 'tidak_siap') return 'TIDAK_SIAP';
   if (norm === 'belum_hantar') return 'BELUM_HANTAR';
   return 'BELUM_DISEMAK';
 }
@@ -127,10 +120,11 @@ export async function saveStudentRecord(record: StudentRecordPayload): Promise<S
     student_id: studentId,
     subject_id: subjectId,
     record_date: recordDate,
-    status: normalizedStatus, // 'hantar' | 'belum_hantar' | 'disemak'
+    status: normalizedStatus, // 'hantar' | 'tidak_siap' | 'belum_hantar' | 'disemak'
     points_awarded: pts,
     remark: record.remark ?? null,
     work_note: record.work_note ?? null,
+    incomplete_note: record.incomplete_note ?? null,
     task_title: record.task_title ?? null,
     class_id: record.class_id ?? null,
   };
@@ -142,31 +136,7 @@ export async function saveStudentRecord(record: StudentRecordPayload): Promise<S
   console.log("DATE:", recordDate);
 
   try {
-    // A. JIKA SUPABASE DISEDIAKAN: Lakukan UPSERT terus ke jadual student_records
-    if (supabase) {
-      const { data, error } = await supabase
-        .from("student_records")
-        .upsert(payload, {
-          onConflict: "student_id,subject_id,record_date",
-        })
-        .select();
-
-      if (error) {
-        console.error("SAVE RECORD ERROR:", error);
-        console.error("ERROR CODE:", error?.code);
-        console.error("ERROR MESSAGE:", error?.message);
-        console.error("ERROR DETAILS:", error?.details);
-        console.error("ERROR HINT:", error?.hint);
-        throw error;
-      }
-
-      return {
-        success: true,
-        message: 'Rekod murid berjaya disimpan ke Supabase.',
-      };
-    }
-
-    // B. JIKA SUPABASE TIADA: Hantar ke API backend (/api/student_records)
+    // Hantar ke API backend Express (/api/student_records)
     const res = await fetch('/api/student_records', {
       method: 'POST',
       headers: {
@@ -246,17 +216,18 @@ function saveRecordToLocalStorageCache(payload: any) {
     );
 
     const intStatus = toInternalStatus(payload.status);
-    const isSubmitted = intStatus === 'DIHANTAR';
+    const isBookSubmitted = intStatus === 'DIHANTAR' || intStatus === 'TIDAK_SIAP';
 
     if (targetAssignment) {
       targetAssignment.submissions[payload.student_id] = {
         studentId: payload.student_id,
         status: intStatus,
-        submitted: isSubmitted,
-        submittedAt: isSubmitted ? new Date().toISOString() : undefined,
-        pointsAwarded: payload.points_awarded || (isSubmitted ? 10 : 0),
+        submitted: isBookSubmitted,
+        submittedAt: isBookSubmitted ? new Date().toISOString() : undefined,
+        pointsAwarded: typeof payload.points_awarded === 'number' ? payload.points_awarded : (intStatus === 'DIHANTAR' ? 10 : 0),
         remark: payload.remark || undefined,
         workNote: payload.work_note || undefined,
+        incompleteNote: payload.incomplete_note || undefined,
       };
     }
 
@@ -267,7 +238,7 @@ function saveRecordToLocalStorageCache(payload: any) {
 }
 
 /**
- * Memuatkan rekod dari database server pusat atau Supabase.
+ * Memuatkan rekod dari database server pusat atau cache tempatan.
  */
 export async function loadRecordsFromDatabase(): Promise<{
   classes: ClassGroup[];
@@ -275,7 +246,6 @@ export async function loadRecordsFromDatabase(): Promise<{
   availableYears: string[];
   selectedYear: string;
 }> {
-  // A. Jika Supabase dikonfigurasi, kita boleh memuatkan rekod dari Supabase atau API
   try {
     const res = await fetch('/api/records', {
       method: 'GET',
@@ -303,7 +273,7 @@ export async function loadRecordsFromDatabase(): Promise<{
       }
     }
   } catch (err: any) {
-    console.warn('Pelayan API tidak dapat dicapai, menyemak cache tempatan / Supabase:', err?.message);
+    console.warn('Pelayan API tidak dapat dicapai, menyemak cache tempatan:', err?.message);
   }
 
   // B. Fallback ke cache tempatan

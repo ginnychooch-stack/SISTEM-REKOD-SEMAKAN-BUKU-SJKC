@@ -44,6 +44,7 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
 
   const studentStats = currentClass.students.map((student) => {
     let dihantarCount = 0;
+    let tidakSiapCount = 0;
     let belumHantarCount = 0;
     let belumDisemakCount = 0;
     let remarksCount: Record<string, number> = {};
@@ -56,6 +57,11 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
         if (sub?.remark) {
           remarksCount[sub.remark] = (remarksCount[sub.remark] || 0) + 1;
         }
+      } else if (status === 'TIDAK_SIAP') {
+        tidakSiapCount++;
+        if (sub?.remark) {
+          remarksCount[sub.remark] = (remarksCount[sub.remark] || 0) + 1;
+        }
       } else if (status === 'BELUM_HANTAR') {
         belumHantarCount++;
       } else {
@@ -64,24 +70,26 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
     });
 
     // Formula Kadar Penghantaran (Kecualikan Belum Disemak):
-    // Jika ada semakan (dihantar + belum hantar > 0): (dihantar / (dihantar + belum_hantar)) * 100
-    const semakanSelesai = dihantarCount + belumHantarCount;
-    const rate = semakanSelesai > 0 ? Math.round((dihantarCount / semakanSelesai) * 100) : 0;
+    // Buku dihantar merangkumi dihantar + tidak_siap
+    const semakanSelesai = dihantarCount + tidakSiapCount + belumHantarCount;
+    const submittedCount = dihantarCount + tidakSiapCount;
+    const rate = semakanSelesai > 0 ? Math.round((submittedCount / semakanSelesai) * 100) : 0;
     
     // Check recent trend
     let isImproving = false;
     if (totalTasks >= 2) {
       const lastStatus = getSubmissionStatus(classAssignments[0]?.submissions[student.id]);
       const prevStatus = getSubmissionStatus(classAssignments[1]?.submissions[student.id]);
-      if (lastStatus === 'DIHANTAR' && prevStatus === 'BELUM_HANTAR') {
+      if ((lastStatus === 'DIHANTAR' || lastStatus === 'TIDAK_SIAP') && prevStatus === 'BELUM_HANTAR') {
         isImproving = true;
       }
     }
 
     return {
       student,
-      submittedCount: dihantarCount,
+      submittedCount,
       dihantarCount,
+      tidakSiapCount,
       belumHantarCount,
       belumDisemakCount,
       semakanSelesai,
@@ -457,8 +465,12 @@ export const PerformanceDashboard: React.FC<PerformanceDashboardProps> = ({
                     return (
                       <td key={task.id} className="p-3 text-center">
                         {status === 'DIHANTAR' ? (
-                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 shadow-xs" title="Telah Dihantar">
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 shadow-xs" title="Telah Dihantar (Kerja Siap)">
                             <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          </span>
+                        ) : status === 'TIDAK_SIAP' ? (
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100 text-amber-800 shadow-xs border border-amber-300" title={sub?.workNote ? `Dihantar - Kerja Tidak Siap: ${sub.workNote}` : 'Dihantar – Kerja Tidak Siap'}>
+                            <AlertTriangle className="w-3.5 h-3.5 stroke-[2.5]" />
                           </span>
                         ) : status === 'BELUM_HANTAR' ? (
                           <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rose-100 text-rose-600 shadow-xs" title="Belum Hantar">

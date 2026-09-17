@@ -28,7 +28,7 @@ export function hasMeaningfulData(classes?: ClassGroup[], assignments?: Assignme
     for (const a of assignments) {
       if (!a.submissions) continue;
       for (const sub of Object.values(a.submissions)) {
-        if (sub.status === 'DIHANTAR' || sub.status === 'BELUM_HANTAR' || sub.submitted || sub.workNote || sub.remark) {
+        if (sub.status === 'DIHANTAR' || sub.status === 'TIDAK_SIAP' || sub.status === 'BELUM_HANTAR' || sub.submitted || sub.workNote || sub.remark) {
           return true;
         }
       }
@@ -72,7 +72,7 @@ export function calculateDatasetStats(classes: ClassGroup[], assignments: Assign
   assignments.forEach((a) => {
     if (a.submissions) {
       Object.values(a.submissions).forEach((sub) => {
-        if (sub.status === 'DIHANTAR' || sub.status === 'BELUM_HANTAR' || sub.submitted) {
+        if (sub.status === 'DIHANTAR' || sub.status === 'TIDAK_SIAP' || sub.status === 'BELUM_HANTAR' || sub.submitted) {
           totalSubmissionsMarked++;
         }
       });

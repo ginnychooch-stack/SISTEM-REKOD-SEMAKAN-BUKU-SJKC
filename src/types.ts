@@ -26,17 +26,18 @@ export type RemarkType =
   | 'Hantar Lewat 🕒' 
   | 'Sangat Rajin 🔥';
 
-export type SubmissionStatus = 'BELUM_DISEMAK' | 'DIHANTAR' | 'BELUM_HANTAR';
+export type SubmissionStatus = 'BELUM_DISEMAK' | 'DIHANTAR' | 'BELUM_HANTAR' | 'TIDAK_SIAP';
 
 export interface SubmissionItem {
   studentId: string;
-  status?: SubmissionStatus; // 'BELUM_DISEMAK' | 'DIHANTAR' | 'BELUM_HANTAR'
-  submitted?: boolean; // kept for backwards compatibility if needed
+  status?: SubmissionStatus; // 'BELUM_DISEMAK' | 'DIHANTAR' | 'BELUM_HANTAR' | 'TIDAK_SIAP'
+  submitted?: boolean; // kept for backwards compatibility if needed (true for DIHANTAR & TIDAK_SIAP)
   submittedAt?: string;
   pointsAwarded: number;
   remark?: RemarkType;
   correctionDone?: boolean;
   workNote?: string; // Ruang menaip untuk kerja/catatan kerja murid (cth: jawapan, markah, ms latihan, topik)
+  incompleteNote?: string; // Sebab / Catatan Kerja Tidak Siap
 }
 
 export interface Assignment {

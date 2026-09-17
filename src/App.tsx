@@ -32,6 +32,7 @@ import {
   scanAllStorageForRecoverableData, 
   archiveCurrentSnapshot 
 } from './utils/recoveryUtils';
+import { getSubmissionStatus, getNextStatus } from './utils/statusUtils';
 
 const sumNumbers = (obj?: Record<string, number>): number => {
   if (!obj) return 0;
@@ -634,36 +635,37 @@ export default function App() {
     }
 
     const currentSub = targetAssignment.submissions[studentId];
-    const currentStatus: SubmissionStatus = 
-      (currentSub?.status === 'DIHANTAR' || currentSub?.status === 'BELUM_HANTAR' || currentSub?.status === 'BELUM_DISEMAK')
-        ? currentSub.status
-        : currentSub?.submitted ? 'DIHANTAR' : 'BELUM_DISEMAK';
+    const currentStatus: SubmissionStatus = getSubmissionStatus(currentSub);
 
     let nextStatus: SubmissionStatus;
     if (nextExplicitStatus) {
       nextStatus = nextExplicitStatus;
     } else {
-      if (currentStatus === 'BELUM_DISEMAK') nextStatus = 'DIHANTAR';
-      else if (currentStatus === 'DIHANTAR') nextStatus = 'BELUM_HANTAR';
-      else nextStatus = 'BELUM_DISEMAK';
+      nextStatus = getNextStatus(currentStatus);
     }
 
-    const wasSubmitted = currentStatus === 'DIHANTAR';
-    const isNowSubmitted = nextStatus === 'DIHANTAR';
-    const pts = targetAssignment.pointsValue || 10;
+    const wasFullSubmitted = currentStatus === 'DIHANTAR';
+    const isNowFullSubmitted = nextStatus === 'DIHANTAR';
+    const isBookSubmitted = nextStatus === 'DIHANTAR' || nextStatus === 'TIDAK_SIAP';
+    const pts = isNowFullSubmitted ? (targetAssignment.pointsValue || 10) : 0;
     const taskSubject = targetAssignment.subject || selectedSubject;
     const recordDate = taskMeta?.date || targetAssignment.dateAssigned || new Date().toISOString().split('T')[0];
-    const normStatus = nextStatus === 'DIHANTAR' ? 'hantar' : nextStatus === 'BELUM_HANTAR' ? 'belum_hantar' : 'disemak';
+    const normStatus = 
+      nextStatus === 'DIHANTAR' ? 'hantar' :
+      nextStatus === 'TIDAK_SIAP' ? 'tidak_siap' :
+      nextStatus === 'BELUM_HANTAR' ? 'belum_hantar' : 'disemak';
 
     // 1. Simpan rekod murid terus ke pangkalan data (UPSERT berasaskan student_id, subject_id, record_date)
+    const activeIncompleteNote = currentSub?.incompleteNote || currentSub?.workNote || null;
     const saveResult = await saveStudentRecord({
       student_id: studentId,
       subject_id: taskSubject,
       record_date: recordDate,
       status: normStatus,
-      points_awarded: isNowSubmitted ? pts : 0,
+      points_awarded: pts,
       remark: currentSub?.remark || null,
       work_note: currentSub?.workNote || null,
+      incomplete_note: nextStatus === 'TIDAK_SIAP' ? activeIncompleteNote : (currentSub?.incompleteNote || null),
       task_title: taskMeta?.title || targetAssignment.title || `Semakan ${taskSubject}`,
       class_id: selectedClassId,
     });
@@ -690,11 +692,12 @@ export default function App() {
           [studentId]: {
             studentId,
             status: nextStatus,
-            submitted: isNowSubmitted,
-            submittedAt: isNowSubmitted ? (currentSub?.submittedAt || new Date().toISOString()) : undefined,
-            pointsAwarded: isNowSubmitted ? pts : 0,
+            submitted: isBookSubmitted,
+            submittedAt: isBookSubmitted ? (currentSub?.submittedAt || new Date().toISOString()) : undefined,
+            pointsAwarded: pts,
             remark: currentSub?.remark,
             workNote: currentSub?.workNote,
+            incompleteNote: nextStatus === 'TIDAK_SIAP' ? (currentSub?.incompleteNote || currentSub?.workNote) : currentSub?.incompleteNote,
           },
         },
       };
@@ -702,7 +705,7 @@ export default function App() {
 
     // Update student subject points & stars (Data per subjek diasingkan sepenuhnya)
     let nextClasses = classesRef.current;
-    if (wasSubmitted !== isNowSubmitted) {
+    if (wasFullSubmitted !== isNowFullSubmitted) {
       nextClasses = classesRef.current.map((cls) => {
         if (cls.id !== selectedClassId) return cls;
         return {
@@ -711,8 +714,8 @@ export default function App() {
             if (st.id !== studentId) return st;
             const currentSubjPoints = st.subjectPoints?.[taskSubject] || 0;
             const currentSubjStars = st.subjectStars?.[taskSubject] || 0;
-            const pointDiff = isNowSubmitted ? pts : -pts;
-            const starDiff = isNowSubmitted ? 1 : -1;
+            const pointDiff = isNowFullSubmitted ? (targetAssignment!.pointsValue || 10) : -(targetAssignment!.pointsValue || 10);
+            const starDiff = isNowFullSubmitted ? 1 : -1;
             const nextSubjPoints = Math.max(0, currentSubjPoints + pointDiff);
             const nextSubjStars = Math.max(0, currentSubjStars + starDiff);
 
@@ -744,7 +747,7 @@ export default function App() {
     // Kemaskini state memori
     setAssignments(nextAssignments);
     assignmentsRef.current = nextAssignments;
-    if (wasSubmitted !== isNowSubmitted) {
+    if (wasFullSubmitted !== isNowFullSubmitted) {
       setClasses(nextClasses);
       classesRef.current = nextClasses;
     }
@@ -818,6 +821,7 @@ export default function App() {
           [studentId]: {
             ...existing,
             workNote: workNote,
+            incompleteNote: existing.status === 'TIDAK_SIAP' ? workNote : existing.incompleteNote,
           },
         },
       };
@@ -845,8 +849,8 @@ export default function App() {
 
     currentClass.students.forEach((student) => {
       const currentSub = target.submissions[student.id];
-      const wasSubmitted = currentSub?.status === 'DIHANTAR' || !!currentSub?.submitted;
-      if (!wasSubmitted) {
+      const wasFullySubmitted = currentSub?.status === 'DIHANTAR';
+      if (!wasFullySubmitted) {
         studentsGainedPoints[student.id] = pts;
       }
       updatedSubmissions[student.id] = {
@@ -857,6 +861,7 @@ export default function App() {
         pointsAwarded: pts,
         remark: currentSub?.remark,
         workNote: currentSub?.workNote,
+        incompleteNote: currentSub?.incompleteNote,
       };
     });
 
@@ -915,7 +920,7 @@ export default function App() {
 
     currentClass.students.forEach((student) => {
       const sub = target.submissions[student.id];
-      if (sub?.submitted || sub?.status === 'DIHANTAR') {
+      if (sub?.status === 'DIHANTAR') {
         studentsLostPoints[student.id] = sub.pointsAwarded || target.pointsValue || 10;
       }
     });

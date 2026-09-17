@@ -14,13 +14,13 @@
           "chineseName": "钟芷琪",
           "gender": "P",
           "avatarSeed": "ZhiQi",
-          "points": 0,
-          "stars": 0,
+          "points": 10,
+          "stars": 1,
           "subjectPoints": {
-            "Bahasa Melayu": 0
+            "Bahasa Melayu": 10
           },
           "subjectStars": {
-            "Bahasa Melayu": 0
+            "Bahasa Melayu": 1
           }
         },
         {
@@ -285,9 +285,10 @@
       "submissions": {
         "1a-1": {
           "studentId": "1a-1",
-          "status": "BELUM_DISEMAK",
-          "submitted": false,
-          "pointsAwarded": 0
+          "status": "DIHANTAR",
+          "submitted": true,
+          "submittedAt": "2026-09-17T12:59:54.761Z",
+          "pointsAwarded": 10
         },
         "1a-2": {
           "studentId": "1a-2",
@@ -341,5 +342,5 @@
     "2029"
   ],
   "selectedYear": "2026",
-  "updatedAt": "2026-09-17T13:00:00.338Z"
+  "updatedAt": "2026-09-17T12:59:54.762Z"
 }

@@ -18,7 +18,8 @@ import {
   Calendar,
   History,
   Check,
-  Loader2
+  Loader2,
+  AlertTriangle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Assignment, BookType, ClassGroup, RemarkType, Student, SubmissionStatus } from '../types';
@@ -100,7 +101,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
     setTitleError(null);
   }, [activeAssignment?.id, activeAssignment?.title, activeAssignment?.dateAssigned, selectedSubject]);
 
-  const [filter, setFilter] = useState<'all' | 'dihantar' | 'belum_hantar' | 'belum_disemak'>('all');
+  const [filter, setFilter] = useState<'all' | 'dihantar' | 'tidak_siap' | 'belum_hantar' | 'belum_disemak'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentForRemark, setSelectedStudentForRemark] = useState<string | null>(null);
 
@@ -136,6 +137,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
   const dihantarList = currentClass.students.filter(
     (s) => getSubmissionStatus(activeAssignment?.submissions[s.id]) === 'DIHANTAR'
   );
+  const tidakSiapList = currentClass.students.filter(
+    (s) => getSubmissionStatus(activeAssignment?.submissions[s.id]) === 'TIDAK_SIAP'
+  );
   const belumHantarList = currentClass.students.filter(
     (s) => getSubmissionStatus(activeAssignment?.submissions[s.id]) === 'BELUM_HANTAR'
   );
@@ -149,6 +153,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
     
     // Status filter
     if (filter === 'dihantar' && status !== 'DIHANTAR') return false;
+    if (filter === 'tidak_siap' && status !== 'TIDAK_SIAP') return false;
     if (filter === 'belum_hantar' && status !== 'BELUM_HANTAR') return false;
     if (filter === 'belum_disemak' && status !== 'BELUM_DISEMAK') return false;
 
@@ -646,6 +651,18 @@ export const RecordView: React.FC<RecordViewProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setFilter('tidak_siap')}
+              className={`min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation ${
+                filter === 'tidak_siap'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'text-amber-800 hover:text-amber-950'
+              }`}
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Tak Siap ({tidakSiapList.length})</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setFilter('belum_hantar')}
               className={`min-h-[44px] flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer touch-manipulation ${
                 filter === 'belum_hantar'
@@ -699,6 +716,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
               const submission = activeAssignment?.submissions[student.id];
               const status = getSubmissionStatus(submission);
               const isSubmitted = status === 'DIHANTAR';
+              const isTidakSiap = status === 'TIDAK_SIAP';
               const isUnsubmitted = status === 'BELUM_HANTAR';
               const isPendingCheck = status === 'BELUM_DISEMAK';
               const remark = submission?.remark;
@@ -711,6 +729,8 @@ export const RecordView: React.FC<RecordViewProps> = ({
                   className={`relative rounded-2xl p-4 transition-all duration-200 border text-left flex flex-col justify-between ${
                     isSubmitted
                       ? 'bg-gradient-to-br from-emerald-50/80 via-white to-emerald-50/30 border-emerald-300 shadow-sm hover:border-emerald-400 hover:shadow-md'
+                      : isTidakSiap
+                      ? 'bg-gradient-to-br from-amber-50/80 via-white to-amber-50/30 border-amber-300 shadow-xs hover:border-amber-400 hover:shadow-sm'
                       : isUnsubmitted
                       ? 'bg-gradient-to-br from-rose-50/80 via-white to-rose-50/30 border-rose-300 shadow-xs hover:border-rose-400 hover:shadow-sm'
                       : 'bg-white border-slate-200/90 shadow-2xs hover:border-slate-300 hover:bg-slate-50/60'
@@ -725,6 +745,8 @@ export const RecordView: React.FC<RecordViewProps> = ({
                           className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shadow-xs ${
                             isSubmitted
                               ? 'bg-emerald-600 text-white'
+                              : isTidakSiap
+                              ? 'bg-amber-500 text-white'
                               : isUnsubmitted
                               ? 'bg-rose-600 text-white'
                               : student.gender === 'P'
@@ -766,16 +788,20 @@ export const RecordView: React.FC<RecordViewProps> = ({
                         } ${
                           isSubmitted
                             ? 'text-emerald-600 bg-emerald-100/80 hover:bg-emerald-200'
+                            : isTidakSiap
+                            ? 'text-amber-600 bg-amber-100/80 hover:bg-amber-200'
                             : isUnsubmitted
                             ? 'text-rose-600 bg-rose-100/80 hover:bg-rose-200'
                             : 'text-slate-400 hover:text-slate-600 bg-slate-100'
                         }`}
                         title={`Status semasa: ${
-                          isSubmitted ? 'DIHANTAR' : isUnsubmitted ? 'BELUM HANTAR' : 'BELUM DISEMAK'
+                          isSubmitted ? 'DIHANTAR' : isTidakSiap ? 'DIHANTAR – KERJA TIDAK SIAP' : isUnsubmitted ? 'BELUM HANTAR' : 'BELUM DISEMAK'
                         }. Klik untuk tukar status.`}
                       >
                         {isSubmitted ? (
                           <CheckCircle2 className="w-6 h-6 fill-emerald-500 text-white" />
+                        ) : isTidakSiap ? (
+                          <AlertTriangle className="w-6 h-6 fill-amber-500 text-white" />
                         ) : isUnsubmitted ? (
                           <XCircle className="w-6 h-6 fill-rose-500 text-white" />
                         ) : (
@@ -784,8 +810,9 @@ export const RecordView: React.FC<RecordViewProps> = ({
                       </button>
                     </div>
 
-                    {/* 3-State Direct Action Buttons (Hantar, Belum Hantar, Disemak) with min-h-[44px] */}
-                    <div className="grid grid-cols-3 gap-1.5 my-2.5">
+                    {/* 2 Kolum × 2 Baris Grid Butang Status */}
+                    <div className="grid grid-cols-2 gap-2 my-2.5">
+                      {/* Baris 1: Hantar (Hijau) */}
                       <button
                         type="button"
                         disabled={isStudentSaving || isSaving}
@@ -793,19 +820,41 @@ export const RecordView: React.FC<RecordViewProps> = ({
                           e.stopPropagation();
                           handleStatusSelect(student.id, 'DIHANTAR');
                         }}
-                        className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                        className={`h-11 min-h-[44px] w-full px-2 py-2 rounded-xl text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-all touch-manipulation cursor-pointer active:scale-95 border text-center ${
                           isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
                         } ${
                           isSubmitted
                             ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-600/30'
-                            : 'bg-emerald-50/70 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
+                            : 'bg-emerald-50/80 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
                         }`}
-                        title="Tandakan status murid sebagai Dihantar (+10 mata)"
+                        title="Tandakan status murid sebagai Dihantar (Kerja Siap, +10 mata)"
                       >
                         <CheckCircle2 className={`w-4 h-4 shrink-0 ${isSubmitted ? 'text-white fill-emerald-500' : 'text-emerald-600'}`} />
-                        <span className="whitespace-nowrap font-extrabold text-[11px]">{isStudentSaving ? 'Menyimpan...' : 'Hantar'}</span>
+                        <span className="whitespace-nowrap">{isStudentSaving ? '...' : 'Hantar'}</span>
                       </button>
 
+                      {/* Baris 1: Tak Siap (Amber / Jingga) */}
+                      <button
+                        type="button"
+                        disabled={isStudentSaving || isSaving}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStatusSelect(student.id, 'TIDAK_SIAP');
+                        }}
+                        className={`h-11 min-h-[44px] w-full px-2 py-2 rounded-xl text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-all touch-manipulation cursor-pointer active:scale-95 border text-center ${
+                          isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+                        } ${
+                          isTidakSiap
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-sm shadow-amber-500/30'
+                            : 'bg-amber-50/80 text-amber-900 border-amber-300 hover:bg-amber-100 hover:border-amber-400'
+                        }`}
+                        title="Tandakan buku dihantar tetapi kerja belum lengkap (0 mata)"
+                      >
+                        <AlertTriangle className={`w-4 h-4 shrink-0 ${isTidakSiap ? 'text-white fill-amber-300 text-amber-900' : 'text-amber-600'}`} />
+                        <span className="whitespace-nowrap">Tak Siap</span>
+                      </button>
+
+                      {/* Baris 2: Belum Hantar (Merah Lembut) */}
                       <button
                         type="button"
                         disabled={isStudentSaving || isSaving}
@@ -813,19 +862,20 @@ export const RecordView: React.FC<RecordViewProps> = ({
                           e.stopPropagation();
                           handleStatusSelect(student.id, 'BELUM_HANTAR');
                         }}
-                        className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                        className={`h-11 min-h-[44px] w-full px-2 py-2 rounded-xl text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-all touch-manipulation cursor-pointer active:scale-95 border text-center ${
                           isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
                         } ${
                           isUnsubmitted
                             ? 'bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-600/30'
-                            : 'bg-rose-50/70 text-rose-800 border-rose-200 hover:bg-rose-100 hover:border-rose-300'
+                            : 'bg-rose-50/80 text-rose-800 border-rose-200 hover:bg-rose-100 hover:border-rose-300'
                         }`}
                         title="Tandakan status murid sebagai Belum Hantar"
                       >
                         <XCircle className={`w-4 h-4 shrink-0 ${isUnsubmitted ? 'text-white fill-rose-500' : 'text-rose-600'}`} />
-                        <span className="whitespace-nowrap font-extrabold text-[11px]">Belum Hantar</span>
+                        <span className="whitespace-nowrap">Belum Hantar</span>
                       </button>
 
+                      {/* Baris 2: Disemak (Biru Gelap) */}
                       <button
                         type="button"
                         disabled={isStudentSaving || isSaving}
@@ -833,32 +883,37 @@ export const RecordView: React.FC<RecordViewProps> = ({
                           e.stopPropagation();
                           handleStatusSelect(student.id, 'BELUM_DISEMAK');
                         }}
-                        className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                        className={`h-11 min-h-[44px] w-full px-2 py-2 rounded-xl text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1.5 transition-all touch-manipulation cursor-pointer active:scale-95 border text-center ${
                           isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
                         } ${
                           isPendingCheck
-                            ? 'bg-slate-700 text-white border-slate-700 shadow-sm shadow-slate-700/30'
+                            ? 'bg-blue-950 text-white border-blue-950 shadow-sm shadow-blue-950/30'
                             : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
                         }`}
-                        title="Tandakan status murid sebagai Belum Disemak"
+                        title="Tandakan status murid sebagai Disemak / Belum Disemak"
                       >
                         <Clock className={`w-4 h-4 shrink-0 ${isPendingCheck ? 'text-white' : 'text-slate-500'}`} />
-                        <span className="whitespace-nowrap font-extrabold text-[11px]">Disemak</span>
+                        <span className="whitespace-nowrap">Disemak</span>
                       </button>
                     </div>
 
-                    {/* 3-State Interactive Chip */}
+                    {/* Paparan Status Penuh Selepas Butang Ditekan */}
                     <div 
                       onClick={() => !isStudentSaving && handleCardClick(student.id)}
-                      className={`cursor-pointer mb-2 inline-block select-none touch-manipulation ${
+                      className={`cursor-pointer mb-2.5 inline-block select-none touch-manipulation ${
                         isStudentSaving ? 'opacity-50 pointer-events-none' : ''
                       }`}
-                      title="Klik untuk kitar status: BELUM DISEMAK ➔ DIHANTAR ➔ BELUM HANTAR"
+                      title="Klik untuk kitar status: DISEMAK ➔ DIHANTAR ➔ TAK SIAP ➔ BELUM HANTAR"
                     >
                       {isSubmitted ? (
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-300">
                           <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
                           <span>DIHANTAR (+10 mata {selectedSubject})</span>
+                        </div>
+                      ) : isTidakSiap ? (
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-100 text-amber-950 text-xs font-bold border border-amber-400 shadow-2xs">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>DIHANTAR – KERJA TIDAK SIAP</span>
                         </div>
                       ) : isUnsubmitted ? (
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 text-xs font-bold border border-rose-300">
@@ -868,7 +923,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
                       ) : (
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-300 hover:bg-slate-200 transition-colors">
                           <Clock className="w-3.5 h-3.5 text-slate-500" />
-                          <span>BELUM DISEMAK</span>
+                          <span>DISEMAK</span>
                         </div>
                       )}
                     </div>
@@ -880,21 +935,31 @@ export const RecordView: React.FC<RecordViewProps> = ({
                       </div>
                     )}
 
-                    {/* Ruang Menaip Kerja Murid (Catatan/Markah/Status Latihan) */}
+                    {/* Ruang Menaip Kerja Murid / Sebab Catatan Kerja Tidak Siap */}
                     <div className="mt-2 pt-2 border-t border-slate-100">
                       <div className="flex items-center justify-between gap-1 mb-1">
-                        <span className="text-[10px] font-bold text-slate-500 flex items-center gap-1 uppercase tracking-wider">
-                          <PenTool className="w-3 h-3 text-indigo-500" />
-                          Ruang Kerja Murid:
+                        <span className={`text-[10px] font-bold flex items-center gap-1 uppercase tracking-wider ${
+                          isTidakSiap ? 'text-amber-900' : 'text-slate-500'
+                        }`}>
+                          {isTidakSiap ? (
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          ) : (
+                            <PenTool className="w-3 h-3 text-indigo-500" />
+                          )}
+                          {isTidakSiap ? 'Sebab / Catatan Kerja Tidak Siap:' : 'Ruang Kerja Murid:'}
                         </span>
                         {submission?.workNote && (
-                          <span className="text-[10px] text-emerald-600 font-semibold">Tercatat</span>
+                          <span className={`text-[10px] font-semibold ${isTidakSiap ? 'text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded' : 'text-emerald-600'}`}>Tercatat</span>
                         )}
                       </div>
                       <div className="relative">
                         <input
                           type="text"
-                          placeholder="Taip nota kerja murid (cth: Skor 9/10, ms 45 siap...)"
+                          placeholder={
+                            isTidakSiap
+                              ? 'Contoh: Soalan 5–8 belum siap / perlu sambung latihan / belum lengkap langkah pengiraan'
+                              : 'Taip nota kerja murid (cth: Skor 9/10, ms 45 siap...)'
+                          }
                           value={submission?.workNote || ''}
                           onChange={(e) => {
                             if (!validateTitle()) return;
@@ -903,14 +968,18 @@ export const RecordView: React.FC<RecordViewProps> = ({
                             }
                           }}
                           onClick={(e) => e.stopPropagation()}
-                          className="w-full text-xs px-2.5 py-1.5 bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 focus:border-indigo-400 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 transition-colors"
+                          className={`w-full text-xs px-2.5 py-1.5 rounded-lg placeholder:text-slate-400 focus:outline-none focus:ring-1 transition-colors ${
+                            isTidakSiap
+                              ? 'bg-amber-50/70 hover:bg-white focus:bg-white border border-amber-300 focus:border-amber-500 focus:ring-amber-500 text-amber-950 placeholder:text-amber-800/60 shadow-2xs'
+                              : 'bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 focus:border-indigo-400 focus:ring-indigo-400 text-slate-800'
+                          }`}
                         />
                       </div>
                     </div>
                   </div>
 
                   {/* Bottom: Teacher remark selector */}
-                  {(isSubmitted || isUnsubmitted) && (
+                  {(isSubmitted || isTidakSiap || isUnsubmitted) && (
                     <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
                       <button
                         type="button"

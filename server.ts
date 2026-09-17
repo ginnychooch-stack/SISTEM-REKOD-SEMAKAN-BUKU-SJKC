@@ -289,6 +289,7 @@ async function startServer() {
         points_awarded,
         remark,
         work_note,
+        incomplete_note,
         task_title,
         class_id,
       } = req.body;
@@ -308,11 +309,20 @@ async function startServer() {
 
       // Normalized status mapping
       const normStatus = String(status).toLowerCase().trim();
-      let internalStatus: 'DIHANTAR' | 'BELUM_HANTAR' | 'BELUM_DISEMAK' = 'BELUM_DISEMAK';
+      let internalStatus: 'DIHANTAR' | 'BELUM_HANTAR' | 'BELUM_DISEMAK' | 'TIDAK_SIAP' = 'BELUM_DISEMAK';
       let isSubmitted = false;
       if (normStatus === 'hantar' || normStatus === 'dihantar') {
         internalStatus = 'DIHANTAR';
         isSubmitted = true;
+      } else if (
+        normStatus === 'tidak_siap' ||
+        normStatus === 'tidak siap' ||
+        normStatus === 'hantar_tak_siap' ||
+        normStatus === 'hantar_tidak_siap' ||
+        normStatus === 'dihantar_tidak_siap'
+      ) {
+        internalStatus = 'TIDAK_SIAP';
+        isSubmitted = true; // Rekod murid dianggap telah menghantar buku
       } else if (normStatus === 'belum_hantar' || normStatus === 'belum hantar') {
         internalStatus = 'BELUM_HANTAR';
         isSubmitted = false;
@@ -321,7 +331,10 @@ async function startServer() {
         isSubmitted = false;
       }
 
-      const pts = Number(points_awarded) || (isSubmitted ? 10 : 0);
+      // Jangan beri markah ganjaran +10 mata secara automatik untuk status TIDAK_SIAP
+      const pts = typeof points_awarded === 'number'
+        ? points_awarded
+        : (internalStatus === 'DIHANTAR' ? 10 : 0);
 
       // Find target assignment for student_id, subject_id, record_date (and class_id if available)
       let assignmentIndex = currentAssignments.findIndex(
@@ -347,6 +360,7 @@ async function startServer() {
             pointsAwarded: pts,
             remark: remark !== undefined ? remark : prevSub?.remark,
             workNote: work_note !== undefined ? work_note : prevSub?.workNote,
+            incompleteNote: incomplete_note !== undefined ? incomplete_note : prevSub?.incompleteNote,
           },
         };
         currentAssignments[assignmentIndex] = targetAssignment;
@@ -367,6 +381,7 @@ async function startServer() {
               pointsAwarded: st.id === student_id ? pts : 0,
               remark: st.id === student_id ? (remark || undefined) : undefined,
               workNote: st.id === student_id ? (work_note || undefined) : undefined,
+              incompleteNote: st.id === student_id ? (incomplete_note || undefined) : undefined,
             };
           });
         }
@@ -399,9 +414,15 @@ async function startServer() {
           let totalSubjectStars = 0;
 
           currentAssignments.forEach((ass) => {
-            if (ass.subject === subject_id && ass.submissions?.[student_id]?.submitted) {
-              totalSubjectPts += ass.submissions[student_id].pointsAwarded || 10;
-              totalSubjectStars += 1;
+            const sub = ass.submissions?.[student_id];
+            if (ass.subject === subject_id && sub) {
+              if (sub.status === 'DIHANTAR') {
+                totalSubjectPts += (typeof sub.pointsAwarded === 'number' ? sub.pointsAwarded : 10);
+                totalSubjectStars += 1;
+              } else if (sub.status === 'TIDAK_SIAP') {
+                // Jangan beri markah ganjaran +10 mata secara automatik untuk status TIDAK_SIAP
+                totalSubjectPts += (typeof sub.pointsAwarded === 'number' ? sub.pointsAwarded : 0);
+              }
             }
           });
 

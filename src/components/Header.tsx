@@ -20,7 +20,8 @@ import {
   Settings,
   Clock,
   History,
-  RotateCcw
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react';
 import { ActiveTab, ClassGroup, Assignment } from '../types';
 import { getSubmissionStatus } from '../utils/statusUtils';
@@ -70,8 +71,9 @@ export const Header: React.FC<HeaderProps> = ({
   const currentClass = classes.find((c) => c.id === selectedClassId) || classes[0];
   const availableSubjects = getMainSubjectsForGrade(currentClass ? currentClass.grade : 1);
 
-  // Calculate statistics for active assignment based on 3-status system
+  // Calculate statistics for active assignment based on status system
   let dihantarCount = 0;
+  let tidakSiapCount = 0;
   let belumHantarCount = 0;
   let belumDisemakCount = 0;
   let pointsGiven = 0;
@@ -84,6 +86,8 @@ export const Header: React.FC<HeaderProps> = ({
       if (status === 'DIHANTAR') {
         dihantarCount++;
         pointsGiven += (sub?.pointsAwarded || activeAssignment.pointsValue);
+      } else if (status === 'TIDAK_SIAP') {
+        tidakSiapCount++;
       } else if (status === 'BELUM_HANTAR') {
         belumHantarCount++;
       } else {
@@ -94,10 +98,10 @@ export const Header: React.FC<HeaderProps> = ({
     belumDisemakCount = totalStudents;
   }
 
-  // Kadar Hantar = DIHANTAR / (DIHANTAR + BELUM HANTAR) * 100
-  // Murid berstatus 'BELUM DISEMAK' dikecualikan daripada penyebut
-  const assessedTotal = dihantarCount + belumHantarCount;
-  const submissionRate = assessedTotal > 0 ? Math.round((dihantarCount / assessedTotal) * 100) : 0;
+  // Rekod murid dianggap telah menghantar buku bagi DIHANTAR & TIDAK_SIAP
+  const assessedTotal = dihantarCount + tidakSiapCount + belumHantarCount;
+  const totalBooksSubmitted = dihantarCount + tidakSiapCount;
+  const submissionRate = assessedTotal > 0 ? Math.round((totalBooksSubmitted / assessedTotal) * 100) : 0;
 
   // Format today's date
   const now = new Date();
@@ -286,8 +290,8 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </div>
 
-          {/* 4 Stats Cards */}
-          <div className="w-full grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-3 border-t border-slate-700/60">
+          {/* 5 Stats Cards */}
+          <div className="w-full grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4 pt-3 border-t border-slate-700/60">
             {/* 1: Dihantar */}
             <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3 text-center transition-transform hover:scale-[1.02]">
               <div className="flex items-center justify-center gap-1.5 text-emerald-400 mb-1">
@@ -298,11 +302,25 @@ export const Header: React.FC<HeaderProps> = ({
                 {dihantarCount}
               </div>
               <span className="text-[11px] text-emerald-400/80 font-medium">
-                {totalStudents > 0 ? `${dihantarCount} daripada ${totalStudents}` : '0'} murid
+                {totalStudents > 0 ? `${dihantarCount} siap` : '0 murid'}
               </span>
             </div>
 
-            {/* 2: Belum Hantar */}
+            {/* 2: Hantar Tak Siap (Jingga / Amber) */}
+            <div className="bg-amber-950/40 border border-amber-500/40 rounded-xl p-3 text-center transition-transform hover:scale-[1.02]">
+              <div className="flex items-center justify-center gap-1.5 text-amber-400 mb-1">
+                <AlertTriangle className="w-4 h-4" />
+                <span className="text-xs uppercase tracking-wider font-bold">Tak Siap</span>
+              </div>
+              <div className="text-2xl sm:text-3xl font-extrabold text-amber-300">
+                {tidakSiapCount}
+              </div>
+              <span className="text-[11px] text-amber-400/80 font-medium">
+                {tidakSiapCount === 0 ? 'Tiada tertunggak' : `${tidakSiapCount} dihantar tak siap`}
+              </span>
+            </div>
+
+            {/* 3: Belum Hantar */}
             <div className="bg-rose-950/40 border border-rose-500/30 rounded-xl p-3 text-center transition-transform hover:scale-[1.02]">
               <div className="flex items-center justify-center gap-1.5 text-rose-400 mb-1">
                 <AlertCircle className="w-4 h-4" />
@@ -316,7 +334,7 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </div>
 
-            {/* 3: Belum Disemak (Status Awal) */}
+            {/* 4: Belum Disemak (Status Awal) */}
             <div className="bg-slate-800/80 border border-slate-600/40 rounded-xl p-3 text-center transition-transform hover:scale-[1.02]">
               <div className="flex items-center justify-center gap-1.5 text-slate-300 mb-1">
                 <Clock className="w-4 h-4 text-slate-400" />
@@ -330,8 +348,8 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </div>
 
-            {/* 4: Kadar Penghantaran */}
-            <div className="bg-blue-950/40 border border-blue-500/30 rounded-xl p-3 text-center transition-transform hover:scale-[1.02]">
+            {/* 5: Kadar Penghantaran */}
+            <div className="col-span-2 sm:col-span-1 bg-blue-950/40 border border-blue-500/30 rounded-xl p-3 text-center transition-transform hover:scale-[1.02]">
               <div className="flex items-center justify-center gap-1.5 text-blue-400 mb-1">
                 <Percent className="w-4 h-4" />
                 <span className="text-xs uppercase tracking-wider font-bold">Kadar Hantar</span>
