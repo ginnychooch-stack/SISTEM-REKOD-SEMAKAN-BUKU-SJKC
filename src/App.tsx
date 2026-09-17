@@ -22,7 +22,11 @@ import { AdminAuthModal } from './components/AdminAuthModal';
 import { AdminPanelModal } from './components/AdminPanelModal';
 import { RecoveryModal } from './components/RecoveryModal';
 import { RotateCcw, Shield, CheckCircle2, AlertTriangle, X, History } from 'lucide-react';
-import { loadRecordsFromDatabase, saveRecordsToDatabase } from './services/dbService';
+import { 
+  loadRecordsFromDatabase, 
+  saveRecordsToDatabase, 
+  saveStudentRecord 
+} from './services/dbService';
 import { 
   hasMeaningfulData, 
   scanAllStorageForRecoverableData, 
@@ -584,7 +588,7 @@ export default function App() {
     studentId: string, 
     nextExplicitStatus?: SubmissionStatus,
     taskMeta?: { title?: string; bookType?: BookType; date?: string }
-  ) => {
+  ): Promise<boolean> => {
     let nextAssignments = [...assignmentsRef.current];
     const currentClsSubjectAssignments = nextAssignments.filter(
       (a) => a.classId === selectedClassId && a.subject === selectedSubject
@@ -648,8 +652,35 @@ export default function App() {
     const isNowSubmitted = nextStatus === 'DIHANTAR';
     const pts = targetAssignment.pointsValue || 10;
     const taskSubject = targetAssignment.subject || selectedSubject;
+    const recordDate = taskMeta?.date || targetAssignment.dateAssigned || new Date().toISOString().split('T')[0];
+    const normStatus = nextStatus === 'DIHANTAR' ? 'hantar' : nextStatus === 'BELUM_HANTAR' ? 'belum_hantar' : 'disemak';
 
-    // Update assignment submission
+    // 1. Simpan rekod murid terus ke pangkalan data (UPSERT berasaskan student_id, subject_id, record_date)
+    const saveResult = await saveStudentRecord({
+      student_id: studentId,
+      subject_id: taskSubject,
+      record_date: recordDate,
+      status: normStatus,
+      points_awarded: isNowSubmitted ? pts : 0,
+      remark: currentSub?.remark || null,
+      work_note: currentSub?.workNote || null,
+      task_title: taskMeta?.title || targetAssignment.title || `Semakan ${taskSubject}`,
+      class_id: selectedClassId,
+    });
+
+    // 2. JIKA SAVE GAGAL: Jangan update paparan UI sebagai berjaya! Kekalkan status asal pada kad.
+    if (!saveResult.success) {
+      setDbNotification({
+        type: 'error',
+        message: saveResult.message || 'Gagal menyimpan rekod. Sila cuba semula.',
+      });
+      setTimeout(() => {
+        setDbNotification((prev) => (prev?.type === 'error' ? null : prev));
+      }, 4500);
+      return false;
+    }
+
+    // 3. JIKA BERJAYA: Kemas kini data submission tugasan dalam memori
     nextAssignments = nextAssignments.map((a) => {
       if (a.id !== targetAssignment!.id) return a;
       return {
@@ -710,8 +741,25 @@ export default function App() {
       });
     }
 
-    // Debounced triggerSave so rapid successive taps on smartphones are safely recorded
-    await triggerSave(nextClasses, nextAssignments, undefined, undefined, false);
+    // Kemaskini state memori
+    setAssignments(nextAssignments);
+    assignmentsRef.current = nextAssignments;
+    if (wasSubmitted !== isNowSubmitted) {
+      setClasses(nextClasses);
+      classesRef.current = nextClasses;
+    }
+
+    // Simpan sandaran keseluruhan secara asynchronous di latar belakang tanpa menghalang UI
+    saveRecordsToDatabase({
+      classes: nextClasses,
+      assignments: nextAssignments,
+      availableYears: availableYearsRef.current,
+      selectedYear: selectedYearRef.current,
+    }).catch((err) => {
+      console.warn('Latar belakang penyelarasan keseluruhan gagal:', err);
+    });
+
+    return true;
   };
 
   // Update teacher remark on a submission

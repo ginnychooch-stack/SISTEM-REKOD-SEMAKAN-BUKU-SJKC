@@ -278,6 +278,175 @@ async function startServer() {
     }
   });
 
+  // POST /api/student_records - Single student upsert (student_id, subject_id, record_date)
+  app.post("/api/student_records", async (req, res) => {
+    try {
+      const {
+        student_id,
+        subject_id,
+        record_date,
+        status,
+        points_awarded,
+        remark,
+        work_note,
+        task_title,
+        class_id,
+      } = req.body;
+
+      if (!student_id || !subject_id || !record_date || !status) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_PAYLOAD",
+          message: "student_id, subject_id, record_date, dan status wajib diisi.",
+          details: "Null or undefined required fields",
+        });
+      }
+
+      const existingData = readDatabase();
+      const currentClasses = [...(existingData.classes || DEFAULT_CLASSES)];
+      const currentAssignments = [...(existingData.assignments || [])];
+
+      // Normalized status mapping
+      const normStatus = String(status).toLowerCase().trim();
+      let internalStatus: 'DIHANTAR' | 'BELUM_HANTAR' | 'BELUM_DISEMAK' = 'BELUM_DISEMAK';
+      let isSubmitted = false;
+      if (normStatus === 'hantar' || normStatus === 'dihantar') {
+        internalStatus = 'DIHANTAR';
+        isSubmitted = true;
+      } else if (normStatus === 'belum_hantar' || normStatus === 'belum hantar') {
+        internalStatus = 'BELUM_HANTAR';
+        isSubmitted = false;
+      } else {
+        internalStatus = 'BELUM_DISEMAK';
+        isSubmitted = false;
+      }
+
+      const pts = Number(points_awarded) || (isSubmitted ? 10 : 0);
+
+      // Find target assignment for student_id, subject_id, record_date (and class_id if available)
+      let assignmentIndex = currentAssignments.findIndex(
+        (a) =>
+          (!class_id || a.classId === class_id) &&
+          a.subject === subject_id &&
+          a.dateAssigned === record_date
+      );
+
+      let targetAssignment: any;
+      if (assignmentIndex >= 0) {
+        // UPDATE existing assignment submission
+        targetAssignment = { ...currentAssignments[assignmentIndex] };
+        const prevSub = targetAssignment.submissions?.[student_id];
+
+        targetAssignment.submissions = {
+          ...(targetAssignment.submissions || {}),
+          [student_id]: {
+            studentId: student_id,
+            status: internalStatus,
+            submitted: isSubmitted,
+            submittedAt: isSubmitted ? (prevSub?.submittedAt || new Date().toISOString()) : undefined,
+            pointsAwarded: pts,
+            remark: remark !== undefined ? remark : prevSub?.remark,
+            workNote: work_note !== undefined ? work_note : prevSub?.workNote,
+          },
+        };
+        currentAssignments[assignmentIndex] = targetAssignment;
+      } else {
+        // INSERT/UPSERT new assignment if not yet existing for this date & subject
+        const targetClass = currentClasses.find((c) =>
+          class_id ? c.id === class_id : c.students.some((s: any) => s.id === student_id)
+        ) || currentClasses[0];
+
+        const initialSubmissions: Record<string, any> = {};
+        if (targetClass?.students) {
+          targetClass.students.forEach((st: any) => {
+            initialSubmissions[st.id] = {
+              studentId: st.id,
+              status: st.id === student_id ? internalStatus : 'BELUM_DISEMAK',
+              submitted: st.id === student_id ? isSubmitted : false,
+              submittedAt: st.id === student_id && isSubmitted ? new Date().toISOString() : undefined,
+              pointsAwarded: st.id === student_id ? pts : 0,
+              remark: st.id === student_id ? (remark || undefined) : undefined,
+              workNote: st.id === student_id ? (work_note || undefined) : undefined,
+            };
+          });
+        }
+
+        const newAssignmentId = `task-${targetClass?.id || 'class'}-${subject_id.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+        targetAssignment = {
+          id: newAssignmentId,
+          classId: targetClass?.id || class_id || 'class-1a',
+          subject: subject_id,
+          title: task_title || `Semakan ${subject_id}`,
+          bookType: 'Buku Latihan (Tulis/Kira)',
+          dateAssigned: record_date,
+          dueDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+          pointsValue: pts > 0 ? pts : 10,
+          submissions: initialSubmissions,
+        };
+
+        currentAssignments.unshift(targetAssignment);
+      }
+
+      // Update student points in classes
+      for (const cls of currentClasses) {
+        const studentObj = cls.students.find((s: any) => s.id === student_id);
+        if (studentObj) {
+          if (!studentObj.subjectPoints) studentObj.subjectPoints = {};
+          if (!studentObj.subjectStars) studentObj.subjectStars = {};
+
+          // Recompute student's subject points and stars from all assignments
+          let totalSubjectPts = 0;
+          let totalSubjectStars = 0;
+
+          currentAssignments.forEach((ass) => {
+            if (ass.subject === subject_id && ass.submissions?.[student_id]?.submitted) {
+              totalSubjectPts += ass.submissions[student_id].pointsAwarded || 10;
+              totalSubjectStars += 1;
+            }
+          });
+
+          studentObj.subjectPoints[subject_id] = totalSubjectPts;
+          studentObj.subjectStars[subject_id] = totalSubjectStars;
+
+          // Recompute total across all subjects
+          studentObj.points = Object.values(studentObj.subjectPoints).reduce((a: any, b: any) => a + (Number(b) || 0), 0) as number;
+          studentObj.stars = Object.values(studentObj.subjectStars).reduce((a: any, b: any) => a + (Number(b) || 0), 0) as number;
+        }
+      }
+
+      const updatedPayload = {
+        ...existingData,
+        classes: currentClasses,
+        assignments: currentAssignments,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await writeDatabase(updatedPayload);
+
+      res.json({
+        success: true,
+        message: "Rekod murid berjaya disimpan",
+        record: {
+          student_id,
+          subject_id,
+          record_date,
+          status: normStatus,
+          points_awarded: pts,
+        },
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.error("API POST /api/student_records error:", err);
+      res.status(500).json({
+        success: false,
+        code: "SERVER_WRITE_ERROR",
+        message: "Gagal menyimpan rekod murid. Sila cuba semula.",
+        details: err?.message,
+        hint: "Semak kebenaran penulisan fail pangkalan data pada pelayan.",
+      });
+    }
+  });
+
   // POST /api/records/reset - Reset database to default
   app.post("/api/records/reset", async (_req, res) => {
     try {

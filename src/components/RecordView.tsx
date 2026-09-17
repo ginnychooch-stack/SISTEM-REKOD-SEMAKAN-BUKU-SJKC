@@ -39,7 +39,7 @@ interface RecordViewProps {
     studentId: string, 
     nextStatus?: SubmissionStatus,
     taskMeta?: { title: string; bookType: BookType; date: string }
-  ) => void;
+  ) => Promise<boolean> | void;
   onUpdateRemark: (studentId: string, remark: RemarkType) => void;
   onUpdateWorkNote?: (studentId: string, workNote: string) => void;
   onMarkAllSubmitted: () => void;
@@ -90,6 +90,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
   const [titleError, setTitleError] = useState<string | null>(null);
   const [saveSuccessToast, setSaveSuccessToast] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const [savingStudentIds, setSavingStudentIds] = useState<Record<string, boolean>>({});
 
   // Sync title and date when active assignment changes
   useEffect(() => {
@@ -202,29 +203,53 @@ export const RecordView: React.FC<RecordViewProps> = ({
     onCreateOrUpdateTask(effective, bookType, val);
   };
 
-  const handleStatusSelect = (studentId: string, status: SubmissionStatus) => {
+  const handleStatusSelect = async (studentId: string, status: SubmissionStatus) => {
+    // Halang double-click / duplicate request
+    if (savingStudentIds[studentId]) return;
+
     const effective = getEffectiveTitle();
     if (!taskTitle.trim()) {
       setTaskTitle(effective);
-      onCreateOrUpdateTask(effective, bookType, taskDate);
     }
-    if (status === 'DIHANTAR') {
-      playSuccessDing(soundEnabled);
-      if (dihantarList.length + 1 === currentClass.students.length) {
-        confetti({
-          particleCount: 80,
-          spread: 70,
-          origin: { y: 0.6 },
-        });
-        playCelebrationFanfare(soundEnabled);
+
+    setSavingStudentIds((prev) => ({ ...prev, [studentId]: true }));
+
+    try {
+      const ok = await onToggleSubmission(studentId, status, { title: effective, bookType, date: taskDate });
+
+      // Hanya kemaskini kesan audio/confetti jika database benar-benar berjaya menyimpan
+      if (ok !== false) {
+        if (status === 'DIHANTAR') {
+          playSuccessDing(soundEnabled);
+          if (dihantarList.length + 1 === currentClass.students.length) {
+            confetti({
+              particleCount: 80,
+              spread: 70,
+              origin: { y: 0.6 },
+            });
+            playCelebrationFanfare(soundEnabled);
+          }
+        } else {
+          playToggleOff(soundEnabled);
+        }
       }
-    } else {
-      playToggleOff(soundEnabled);
+    } catch (err: any) {
+      console.error("SAVE RECORD ERROR:", err);
+      console.error("ERROR CODE:", err?.code);
+      console.error("ERROR MESSAGE:", err?.message);
+      console.error("ERROR DETAILS:", err?.details);
+      console.error("ERROR HINT:", err?.hint);
+    } finally {
+      setSavingStudentIds((prev) => {
+        const next = { ...prev };
+        delete next[studentId];
+        return next;
+      });
     }
-    onToggleSubmission(studentId, status, { title: effective, bookType, date: taskDate });
   };
 
   const handleCardClick = (studentId: string) => {
+    if (savingStudentIds[studentId]) return;
     const currentStatus = getSubmissionStatus(activeAssignment?.submissions[studentId]);
     const nextStatus = getNextStatus(currentStatus);
     handleStatusSelect(studentId, nextStatus);
@@ -678,6 +703,7 @@ export const RecordView: React.FC<RecordViewProps> = ({
               const isPendingCheck = status === 'BELUM_DISEMAK';
               const remark = submission?.remark;
               const studentSubjectPoints = student.subjectPoints?.[selectedSubject] || 0;
+              const isStudentSaving = !!savingStudentIds[student.id];
 
               return (
                 <div
@@ -733,8 +759,11 @@ export const RecordView: React.FC<RecordViewProps> = ({
                       {/* Quick status cycle button */}
                       <button
                         type="button"
+                        disabled={isStudentSaving || isSaving}
                         onClick={() => handleCardClick(student.id)}
                         className={`cursor-pointer rounded-full p-1 transition-transform active:scale-90 ${
+                          isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+                        } ${
                           isSubmitted
                             ? 'text-emerald-600 bg-emerald-100/80 hover:bg-emerald-200'
                             : isUnsubmitted
@@ -759,11 +788,14 @@ export const RecordView: React.FC<RecordViewProps> = ({
                     <div className="grid grid-cols-3 gap-1.5 my-2.5">
                       <button
                         type="button"
+                        disabled={isStudentSaving || isSaving}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleStatusSelect(student.id, 'DIHANTAR');
                         }}
                         className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                          isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+                        } ${
                           isSubmitted
                             ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-600/30'
                             : 'bg-emerald-50/70 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
@@ -771,16 +803,19 @@ export const RecordView: React.FC<RecordViewProps> = ({
                         title="Tandakan status murid sebagai Dihantar (+10 mata)"
                       >
                         <CheckCircle2 className={`w-4 h-4 shrink-0 ${isSubmitted ? 'text-white fill-emerald-500' : 'text-emerald-600'}`} />
-                        <span className="whitespace-nowrap font-extrabold text-[11px]">Hantar</span>
+                        <span className="whitespace-nowrap font-extrabold text-[11px]">{isStudentSaving ? 'Menyimpan...' : 'Hantar'}</span>
                       </button>
 
                       <button
                         type="button"
+                        disabled={isStudentSaving || isSaving}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleStatusSelect(student.id, 'BELUM_HANTAR');
                         }}
                         className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                          isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+                        } ${
                           isUnsubmitted
                             ? 'bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-600/30'
                             : 'bg-rose-50/70 text-rose-800 border-rose-200 hover:bg-rose-100 hover:border-rose-300'
@@ -793,11 +828,14 @@ export const RecordView: React.FC<RecordViewProps> = ({
 
                       <button
                         type="button"
+                        disabled={isStudentSaving || isSaving}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleStatusSelect(student.id, 'BELUM_DISEMAK');
                         }}
                         className={`min-h-[44px] px-2 py-1.5 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 transition-all touch-manipulation cursor-pointer active:scale-95 border ${
+                          isStudentSaving ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+                        } ${
                           isPendingCheck
                             ? 'bg-slate-700 text-white border-slate-700 shadow-sm shadow-slate-700/30'
                             : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
@@ -811,8 +849,10 @@ export const RecordView: React.FC<RecordViewProps> = ({
 
                     {/* 3-State Interactive Chip */}
                     <div 
-                      onClick={() => handleCardClick(student.id)}
-                      className="cursor-pointer mb-2 inline-block select-none touch-manipulation"
+                      onClick={() => !isStudentSaving && handleCardClick(student.id)}
+                      className={`cursor-pointer mb-2 inline-block select-none touch-manipulation ${
+                        isStudentSaving ? 'opacity-50 pointer-events-none' : ''
+                      }`}
                       title="Klik untuk kitar status: BELUM DISEMAK ➔ DIHANTAR ➔ BELUM HANTAR"
                     >
                       {isSubmitted ? (
